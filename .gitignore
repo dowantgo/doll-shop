@@ -82,6 +82,7 @@ ehthumbs.db
 # Local logs and temp files
 backend/logs/
 ~$*.xlsx
+.learnings/
 
 # Local demand docs
 demand/*
