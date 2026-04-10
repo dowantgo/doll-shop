@@ -83,5 +83,7 @@ ehthumbs.db
 backend/logs/
 ~$*.xlsx
 
-# Local demand docs (do not upload)
-demand/
+# Local demand docs
+demand/*
+!demand/
+!demand/*.md
