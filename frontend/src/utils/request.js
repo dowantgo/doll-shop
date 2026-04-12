@@ -2,8 +2,8 @@
 import { ElMessage } from 'element-plus'
 
 const api = axios.create({
-  // Use Vite proxy in dev to avoid CORS issues on non-5173 ports.
-  baseURL: 'api/',
+  // Default to Vite proxy in local dev; can be overridden by VITE_API_BASE_URL.
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api/',
   timeout: 5000,
   headers: {
     'Content-Type': 'application/json'
