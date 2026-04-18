@@ -303,20 +303,35 @@ onMounted(() => {
 
 <style scoped>
 .register-page {
-  min-height: 100vh;
+  min-height: calc(100vh - 68px);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f5f5f5;
   padding: 24px;
+  position: relative;
+}
+
+.register-page::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 12% 14%, rgba(255, 143, 61, 0.2), transparent 45%),
+    radial-gradient(circle at 85% 78%, rgba(45, 140, 255, 0.2), transparent 48%);
 }
 
 .register-card {
-  width: 520px;
+  width: 560px;
+  max-width: 100%;
+  position: relative;
+  z-index: 1;
 }
 
 .header {
-  font-weight: 600;
+  font-weight: 800;
+  font-size: 20px;
+  color: #22364f;
 }
 
 .alert {
@@ -328,13 +343,15 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .captcha-img {
   height: 40px;
   cursor: pointer;
-  border-radius: 4px;
-  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  border: 1px solid #d9e4f2;
+  background: #fff;
 }
 
 .link {
@@ -392,7 +409,17 @@ onMounted(() => {
 
 .password-tips {
   font-size: 12px;
-  color: #909399;
+  color: #748397;
   margin-top: 4px;
+}
+
+@media (max-width: 768px) {
+  .register-page {
+    padding: 12px;
+  }
+
+  .register-card {
+    width: 100%;
+  }
 }
 </style>

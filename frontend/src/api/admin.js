@@ -83,5 +83,40 @@ export const adminApi = {
   },
   enableUser(id) {
     return request.post(`/admin/users/${id}/enable/`)
+  },
+
+  // Seckill
+  getSeckillStats() {
+    return request.get('/admin/seckill-stats/')
+  },
+  getSeckillActivities(params) {
+    return request.get('/admin/seckill-activities/', { params })
+  },
+  createSeckillActivity(data) {
+    return request.post('/admin/seckill-activities/', data)
+  },
+  updateSeckillActivity(id, data) {
+    return request.put(`/admin/seckill-activities/${id}/`, data)
+  },
+  deleteSeckillActivity(id) {
+    return request.delete(`/admin/seckill-activities/${id}/`)
+  },
+  adjustSeckillStock(id, data) {
+    return request.patch(`/admin/seckill-activities/${id}/adjust_stock/`, data)
+  },
+  adjustSeckillPrice(id, data) {
+    return request.patch(`/admin/seckill-activities/${id}/adjust_price/`, data)
+  },
+  changeSeckillStatus(id, data) {
+    return request.patch(`/admin/seckill-activities/${id}/change_status/`, data)
+  },
+  getSeckillReservations(params) {
+    return request.get('/admin/seckill-reservations/', { params })
+  },
+  releaseSeckillReservation(id, data) {
+    return request.patch(`/admin/seckill-reservations/${id}/release/`, data || {})
+  },
+  getSeckillActionLogs(params) {
+    return request.get('/admin/seckill-action-logs/', { params })
   }
 }

@@ -84,7 +84,27 @@ backend/logs/
 ~$*.xlsx
 .learnings/
 
-# Local demand docs
-demand/*
-!demand/
-!demand/*.md
+# --------------------------------------------------
+# Local-only files/directories (do not commit)
+# --------------------------------------------------
+
+# Codex/assistant local workspace
+.codex/
+.git2/
+
+# Local binaries/tools
+ngrok.exe
+
+# Local generated data and scratch files
+backend/media/
+backend/tmp_*.py
+
+# Local ad-hoc scripts/tests (non-release)
+backend/scripts/
+backend/tests/
+
+# Legacy local docs folder (migrated to docs/)
+test-docs/
+
+# Legacy requirement drafts (migrated to docs/requirements)
+demand/

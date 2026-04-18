@@ -1,0 +1,131 @@
+version: "3.9"
+
+name: dollshop-iter2
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: dollshop_iter2_mysql
+    restart: unless-stopped
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_general_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "${MYSQL_PORT}:3306"
+    volumes:
+      - iter2_mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h 127.0.0.1 -uroot -p${MYSQL_ROOT_PASSWORD} --silent",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: dollshop_iter2_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT}:6379"
+    volumes:
+      - iter2_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    image: python:3.10-slim
+    container_name: dollshop_iter2_backend
+    restart: unless-stopped
+    working_dir: /app/backend
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app/backend
+    environment:
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: ${DEBUG}
+      DB_NAME: ${MYSQL_DATABASE}
+      DB_USER: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      DB_HOST: mysql
+      DB_PORT: 3306
+      REDIS_URL: redis://redis:6379/0
+      PRODUCT_FEED_CACHE_TTL: ${PRODUCT_FEED_CACHE_TTL}
+      ALIPAY_APP_ID: ${ALIPAY_APP_ID}
+      ALIPAY_PRIVATE_KEY: ${ALIPAY_PRIVATE_KEY}
+      ALIPAY_PUBLIC_KEY: ${ALIPAY_PUBLIC_KEY}
+      ALIPAY_NOTIFY_URL: ${ALIPAY_NOTIFY_URL}
+      ALIPAY_RETURN_URL: ${ALIPAY_RETURN_URL}
+      ALIPAY_DEBUG: ${ALIPAY_DEBUG}
+      MOCK_PAYMENT_ENABLED: ${MOCK_PAYMENT_ENABLED}
+      EMAIL_HOST: ${EMAIL_HOST}
+      EMAIL_PORT: ${EMAIL_PORT}
+      EMAIL_USE_SSL: ${EMAIL_USE_SSL}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS}
+      EMAIL_HOST_USER: ${EMAIL_HOST_USER}
+      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD}
+      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL}
+      INIT_DATA_ON_START: ${INIT_DATA_ON_START}
+    command: >
+      sh -c "
+      pip install --no-cache-dir -r requirements.txt &&
+      python manage.py migrate --noinput &&
+      if [ \"$$INIT_DATA_ON_START\" = \"1\" ]; then python init_data_runner.py; else echo 'skip init_data_runner.py'; fi &&
+      python manage.py runserver 0.0.0.0:8000
+      "
+    ports:
+      - "${BACKEND_PORT}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request,sys;urllib.request.urlopen('http://127.0.0.1:8000/api/products/categories/',timeout=3);sys.exit(0)\"",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  frontend:
+    image: node:18-alpine
+    container_name: dollshop_iter2_frontend
+    restart: unless-stopped
+    working_dir: /app/frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ../frontend:/app/frontend
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+    command: >
+      sh -c "
+      npm install &&
+      npm run dev -- --host 0.0.0.0 --port 5173 --strictPort
+      "
+    ports:
+      - "${FRONTEND_PORT}:5173"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:5173 >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  iter2_mysql_data:
+  iter2_redis_data:

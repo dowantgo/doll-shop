@@ -1,41 +1,35 @@
-<template>
+﻿<template>
   <el-dialog
     v-model="visible"
     title="支付"
-    width="440px"
+    width="460px"
     :close-on-click-modal="false"
     @close="handleClose"
   >
-    <div v-if="step === 'select'">
-      <p>订单金额：￥{{ amount }}</p>
+    <div v-if="step === 'select'" class="pay-step">
+      <p class="pay-amount">订单金额：¥{{ amount }}</p>
       <el-radio-group v-model="selectedMethod">
         <el-radio-button label="mock">模拟支付</el-radio-button>
         <el-radio-button label="alipay">支付宝</el-radio-button>
       </el-radio-group>
-      <div style="margin-top: 16px">
+      <div class="pay-actions">
         <el-button type="primary" :loading="loading" @click="createPayment">创建支付</el-button>
       </div>
     </div>
 
-    <div v-else-if="step === 'qrcode'">
+    <div v-else-if="step === 'qrcode'" class="pay-step">
       <p>支付方式：{{ selectedMethod }}</p>
       <p>支付单号：{{ paymentId }}</p>
-      
-      <!-- 二维码图片展示 -->
-      <div v-if="qrCodeImage" style="text-align: center; margin: 16px 0;">
-        <p style="margin-bottom: 8px;">请扫码支付：</p>
-        <img 
-          :src="qrCodeImage" 
-          alt="支付二维码" 
-          style="max-width: 200px; max-height: 200px; border: 1px solid #eee;"
-        />
+
+      <div v-if="qrCodeImage" class="qrcode-box">
+        <p class="qrcode-title">请扫码支付</p>
+        <img :src="qrCodeImage" alt="支付二维码" class="qrcode-img" />
       </div>
-      
-      <!-- 二维码链接（备用） -->
-      <p style="margin-top: 16px;">二维码链接：</p>
+
+      <p class="qrcode-link-title">二维码链接（备用）：</p>
       <el-input type="textarea" :model-value="qrCodeUrl" :rows="2" readonly />
-      
-      <div style="margin-top: 12px">
+
+      <div class="pay-actions">
         <el-button v-if="selectedMethod === 'mock'" type="success" :loading="mockLoading" @click="mockPay">
           模拟支付成功
         </el-button>
@@ -43,14 +37,14 @@
       </div>
     </div>
 
-    <div v-else-if="step === 'success'">
+    <div v-else-if="step === 'success'" class="pay-step">
       <p>支付成功</p>
       <el-button type="primary" @click="handleSuccess">完成</el-button>
     </div>
 
-    <div v-else>
+    <div v-else class="pay-step">
       <p>支付失败</p>
-      <p style="color: #f56c6c; word-break: break-all">{{ failReason }}</p>
+      <p class="fail-reason">{{ failReason }}</p>
       <el-button type="primary" @click="resetState">重试</el-button>
     </div>
   </el-dialog>
@@ -192,3 +186,52 @@ const handleClose = async () => {
 onUnmounted(clearPoll)
 </script>
 
+<style scoped>
+.pay-step {
+  display: grid;
+  gap: 10px;
+}
+
+.pay-amount {
+  font-weight: 700;
+  color: #22364f;
+}
+
+.qrcode-box {
+  text-align: center;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px dashed #d9e4f2;
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.qrcode-title {
+  margin-bottom: 8px;
+  color: #5f6b7a;
+}
+
+.qrcode-img {
+  max-width: 220px;
+  max-height: 220px;
+  border: 1px solid #e6edf7;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.qrcode-link-title {
+  margin-top: 8px;
+  color: #5f6b7a;
+}
+
+.fail-reason {
+  color: #f56c6c;
+  word-break: break-all;
+}
+
+.pay-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+</style>
