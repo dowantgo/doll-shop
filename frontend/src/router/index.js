@@ -15,6 +15,12 @@ const routes = [
     meta: { public: true }
   },
   {
+    path: '/seckill',
+    component: () => import('../views/SeckillZone.vue'),
+    name: 'SeckillZone',
+    meta: { public: true }
+  },
+  {
     path: '/cart',
     component: () => import('../views/Cart.vue'),
     name: 'Cart',
@@ -67,6 +73,7 @@ const routes = [
       { path: 'products', component: () => import('../components/admin/ProductManageView.vue') },
       { path: 'categories', component: () => import('../components/admin/CategoryManageView.vue') },
       { path: 'orders', component: () => import('../components/admin/OrderManageView.vue') },
+      { path: 'seckill', component: () => import('../components/admin/SeckillManageView.vue') },
       { path: 'inventory', component: () => import('../components/admin/InventoryManageView.vue') },
       { path: 'users', component: () => import('../components/admin/UserManageView.vue') }
     ]

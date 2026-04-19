@@ -121,6 +121,56 @@
             </el-card>
           </div>
         </el-tab-pane>
+
+        <el-tab-pane label="我的评价" name="reviews">
+          <el-card shadow="never">
+            <template #header>
+              <div class="review-header">
+                我的评价
+                <el-button size="small" @click="loadMyReviews">刷新</el-button>
+              </div>
+            </template>
+
+            <div v-loading="myReviewLoading">
+              <el-alert
+                v-if="myReviewError"
+                :title="myReviewError"
+                type="error"
+                :closable="false"
+                show-icon
+                class="review-alert"
+              />
+
+              <el-empty v-else-if="myReviews.length === 0" description="暂无评价记录" />
+
+              <el-table v-else :data="myReviews" style="width: 100%" empty-text="暂无评价记录">
+                <el-table-column label="商品" prop="product_name" min-width="180" />
+                <el-table-column label="评分" width="120">
+                  <template #default="{ row }">
+                    <el-rate :model-value="row.rating" disabled size="small" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="120">
+                  <template #default="{ row }">
+                    <el-tag :type="reviewStatusType(row.status)">
+                      {{ reviewStatusText(row.status) }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="评价内容" min-width="300">
+                  <template #default="{ row }">
+                    <div class="review-content">{{ row.content || '-' }}</div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="时间" min-width="170">
+                  <template #default="{ row }">
+                    {{ formatDate(row.created_at) }}
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </el-card>
+        </el-tab-pane>
       </el-tabs>
     </el-card>
   </div>
@@ -130,6 +180,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { regionData } from 'element-china-area-data'
+import { reviewApi } from '../api/review'
 import { userApi } from '../api/user'
 
 const activeTab = ref('info')
@@ -159,6 +210,9 @@ const locationCodes = reactive({
 const provinceOptions = regionData
 const cityOptions = ref([])
 const districtOptions = ref([])
+const myReviews = ref([])
+const myReviewLoading = ref(false)
+const myReviewError = ref('')
 
 const findNodeByCode = (list, code) => list.find(item => item.value === code)
 const getLabelByCode = (list, code) => findNodeByCode(list, code)?.label || ''
@@ -234,6 +288,43 @@ const loadAddresses = async () => {
   } catch (e) {
     ElMessage.error(e?.response?.data?.error || '获取地址失败')
   }
+}
+
+const loadMyReviews = async () => {
+  myReviewLoading.value = true
+  myReviewError.value = ''
+  try {
+    const res = await reviewApi.getMyReviews({ page: 1, page_size: 20 })
+    myReviews.value = res.results
+  } catch (e) {
+    myReviews.value = []
+    myReviewError.value = e?.response?.data?.error || '获取我的评价失败'
+    ElMessage.error(myReviewError.value)
+  } finally {
+    myReviewLoading.value = false
+  }
+}
+
+const reviewStatusText = status => {
+  if (status === 'rejected') return '已隐藏'
+  return '已发布'
+}
+
+const reviewStatusType = status => {
+  if (status === 'rejected') return 'danger'
+  return 'success'
+}
+
+const formatDate = value => {
+  if (!value) return '-'
+  const dt = new Date(value)
+  if (Number.isNaN(dt.getTime())) return value
+  const y = dt.getFullYear()
+  const m = String(dt.getMonth() + 1).padStart(2, '0')
+  const d = String(dt.getDate()).padStart(2, '0')
+  const hh = String(dt.getHours()).padStart(2, '0')
+  const mm = String(dt.getMinutes()).padStart(2, '0')
+  return `${y}-${m}-${d} ${hh}:${mm}`
 }
 
 const resetForm = () => {
@@ -316,17 +407,18 @@ const removeAddress = async id => {
 }
 
 onMounted(async () => {
-  await Promise.all([loadUser(), loadAddresses()])
+  await Promise.all([loadUser(), loadAddresses(), loadMyReviews()])
 })
 </script>
 
 <style scoped>
 .account-page {
-  padding: 18px;
+  padding: 8px;
 }
 
 .header {
   font-weight: 800;
+  color: #23354d;
 }
 
 .address-wrap {
@@ -339,11 +431,35 @@ onMounted(async () => {
   align-items: center;
 }
 
+.review-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.review-alert {
+  margin-bottom: 12px;
+}
+
+.review-content {
+  line-height: 1.5;
+  color: #303133;
+}
+
 .form-card {
   margin-top: 8px;
 }
 
 .region-select {
   width: 100%;
+}
+
+:deep(.el-tabs__item) {
+  font-weight: 600;
+}
+
+:deep(.el-descriptions__label) {
+  width: 110px;
+  color: #4f5f73;
 }
 </style>

@@ -17,6 +17,13 @@ class UserViewSet(mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.G
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        # Keep object-level isolation for normal users.
+        # Admin can query any user detail; non-admin can only access self.
+        if getattr(self.request.user, 'role', '') == 'admin':
+            return User.objects.all()
+        return User.objects.filter(id=self.request.user.id)
+
     def get_permissions(self):
         if self.action in ['register', 'login', 'captcha', 'send_email_code', 'forgot_password']:
             return [AllowAny()]

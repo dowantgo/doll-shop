@@ -1,8 +1,9 @@
-<template>
-  <div class="login-page">
-    <el-card class="login-card" shadow="never">
+﻿<template>
+  <div class="auth-page">
+    <div class="auth-backdrop"></div>
+    <el-card class="auth-card login-card" shadow="never">
       <template #header>
-        <div class="header">玩偶商城 - 登录</div>
+        <div class="auth-header">玩偶商城 - 登录</div>
       </template>
 
       <el-alert
@@ -14,13 +15,7 @@
         :closable="false"
       />
 
-      <el-form
-        ref="formRef"
-        :model="form"
-        :rules="rules"
-        label-width="100px"
-        @submit.prevent
-      >
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" @submit.prevent>
         <el-form-item label="用户名/邮箱" prop="username">
           <el-input
             v-model="form.username"
@@ -167,21 +162,35 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.login-page {
-  min-height: 100vh;
+.auth-page {
+  min-height: calc(100vh - 68px);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f5f5f5;
   padding: 24px;
+  position: relative;
 }
 
-.login-card {
-  width: 480px;
+.auth-backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 20% 10%, rgba(255, 143, 61, 0.2), transparent 45%),
+    radial-gradient(circle at 80% 80%, rgba(45, 140, 255, 0.2), transparent 48%);
+  pointer-events: none;
 }
 
-.header {
-  font-weight: 600;
+.auth-card {
+  width: 500px;
+  max-width: 100%;
+  position: relative;
+  z-index: 1;
+}
+
+.auth-header {
+  font-size: 20px;
+  font-weight: 800;
+  color: #22364f;
 }
 
 .alert {
@@ -197,11 +206,22 @@ onMounted(() => {
 .captcha-img {
   height: 40px;
   cursor: pointer;
-  border-radius: 4px;
-  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  border: 1px solid #d9e4f2;
+  background: #fff;
 }
 
 .link {
   margin-left: 12px;
+}
+
+@media (max-width: 768px) {
+  .auth-page {
+    padding: 12px;
+  }
+
+  .auth-card {
+    width: 100%;
+  }
 }
 </style>

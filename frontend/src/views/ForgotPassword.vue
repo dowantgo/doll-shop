@@ -1,8 +1,9 @@
-<template>
+﻿<template>
   <div class="forgot-password-page">
+    <div class="auth-backdrop"></div>
     <el-card class="forgot-card" shadow="never">
       <template #header>
-        <div class="header">玩偶商城 - 忘记密码</div>
+        <div class="header">玩偶商城 - 找回密码</div>
       </template>
 
       <el-alert v-if="errorMsg" class="alert" :title="errorMsg" type="error" show-icon :closable="false" />
@@ -15,7 +16,7 @@
 
         <el-form-item label="邮箱验证码" prop="email_code">
           <div class="email-code-row">
-            <el-input v-model="form.email_code" placeholder="请输入邮箱验证码" maxlength="6" style="width: 150px" />
+            <el-input v-model="form.email_code" placeholder="请输入邮箱验证码" maxlength="6" style="width: 160px" />
             <el-button type="primary" :disabled="emailCodeSending || emailCodeCountdown > 0" @click="sendEmailCode">
               {{ emailCodeCountdown > 0 ? `${emailCodeCountdown}秒后重试` : '获取验证码' }}
             </el-button>
@@ -23,14 +24,20 @@
         </el-form-item>
 
         <el-form-item label="新密码" prop="new_password">
-          <el-input v-model="form.new_password" type="password" placeholder="请输入新密码（至少10位，包含大小写字母和数字）" show-password @input="checkPasswordStrength" />
+          <el-input
+            v-model="form.new_password"
+            type="password"
+            placeholder="请输入新密码（至少10位，含大小写字母和数字）"
+            show-password
+            @input="checkPasswordStrength"
+          />
           <div class="password-strength" v-if="form.new_password">
             <div class="strength-bar">
               <div class="strength-fill" :class="passwordStrengthClass" :style="{ width: passwordStrengthPercent + '%' }"></div>
             </div>
             <span class="strength-text" :class="passwordStrengthClass">{{ passwordStrengthText }}</span>
           </div>
-          <div class="password-tips">密码要求：长度至少10位，包含大写字母、小写字母和数字</div>
+          <div class="password-tips">密码要求：长度≥10位，包含大写字母、小写字母、数字</div>
         </el-form-item>
 
         <el-form-item label="确认密码" prop="confirm_password">
@@ -140,12 +147,8 @@ const rules = {
     { required: true, message: '请输入验证码', trigger: 'blur' },
     { len: 6, message: '验证码为6位', trigger: 'blur' }
   ],
-  new_password: [
-    { validator: validatePassword, trigger: 'blur' }
-  ],
-  confirm_password: [
-    { validator: validateConfirmPassword, trigger: 'blur' }
-  ]
+  new_password: [{ validator: validatePassword, trigger: 'blur' }],
+  confirm_password: [{ validator: validateConfirmPassword, trigger: 'blur' }]
 }
 
 const sendEmailCode = async () => {
@@ -163,7 +166,7 @@ const sendEmailCode = async () => {
       if (emailCodeCountdown.value <= 0) clearInterval(timer)
     }, 1000)
   } catch (err) {
-    ElMessage.error(err.message || '发送失败')
+    ElMessage.error(err?.response?.data?.error || err.message || '发送失败')
   } finally {
     emailCodeSending.value = false
   }
@@ -183,10 +186,11 @@ const onSubmit = async () => {
       code: form.email_code,
       password: form.new_password
     })
+    successMsg.value = '密码重置成功，正在返回登录页...'
     ElMessage.success('密码重置成功')
     setTimeout(() => router.push('/login'), 1500)
   } catch (err) {
-    errorMsg.value = err.message || '重置失败'
+    errorMsg.value = err?.response?.data?.error || err.message || '重置失败'
   } finally {
     loading.value = false
   }
@@ -197,26 +201,112 @@ const goLogin = () => router.push('/login')
 
 <style scoped>
 .forgot-password-page {
-  min-height: 100vh;
+  min-height: calc(100vh - 68px);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 24px;
+  position: relative;
 }
-.forgot-card { width: 450px; }
-.header { font-size: 20px; font-weight: bold; text-align: center; color: #303133; }
-.alert { margin-bottom: 20px; }
-.email-code-row { display: flex; gap: 10px; }
-.password-strength { margin-top: 8px; }
-.strength-bar { height: 4px; background: #ddd; border-radius: 2px; }
-.strength-fill { height: 100%; transition: all 0.3s; border-radius: 2px; }
-.strength-fill.weak { background: #f56c6c; }
-.strength-fill.medium { background: #e6a23c; }
-.strength-fill.strong { background: #67c23a; }
-.strength-text { font-size: 12px; }
-.strength-text.weak { color: #f56c6c; }
-.strength-text.medium { color: #e6a23c; }
-.strength-text.strong { color: #67c23a; }
-.password-tips { font-size: 12px; color: #909399; margin-top: 4px; }
-.link { margin-left: 10px; }
+
+.auth-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 16% 15%, rgba(255, 143, 61, 0.2), transparent 45%),
+    radial-gradient(circle at 86% 76%, rgba(45, 140, 255, 0.2), transparent 48%);
+}
+
+.forgot-card {
+  width: 520px;
+  max-width: 100%;
+  position: relative;
+  z-index: 1;
+}
+
+.header {
+  font-size: 20px;
+  font-weight: 800;
+  color: #22364f;
+}
+
+.alert {
+  margin-bottom: 16px;
+}
+
+.email-code-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.password-strength {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.strength-bar {
+  width: 160px;
+  height: 6px;
+  background: #e4e7ed;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.strength-fill {
+  height: 100%;
+  transition: all 0.3s;
+}
+
+.strength-fill.weak {
+  background: #f56c6c;
+}
+
+.strength-fill.medium {
+  background: #e6a23c;
+}
+
+.strength-fill.strong {
+  background: #67c23a;
+}
+
+.strength-text {
+  font-size: 12px;
+}
+
+.strength-text.weak {
+  color: #f56c6c;
+}
+
+.strength-text.medium {
+  color: #e6a23c;
+}
+
+.strength-text.strong {
+  color: #67c23a;
+}
+
+.password-tips {
+  font-size: 12px;
+  color: #748397;
+  margin-top: 4px;
+}
+
+.link {
+  margin-left: 10px;
+}
+
+@media (max-width: 768px) {
+  .forgot-password-page {
+    padding: 12px;
+  }
+
+  .forgot-card {
+    width: 100%;
+  }
+}
 </style>

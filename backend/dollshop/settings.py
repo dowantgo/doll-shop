@@ -49,6 +49,8 @@ INSTALLED_APPS = [
     'apps.orders.apps.OrdersConfig',
     'apps.cart.apps.CartConfig',
     'apps.payment.apps.PaymentConfig',
+    'apps.reviews.apps.ReviewsConfig',
+    'apps.seckill.apps.SeckillConfig',
 ]
 
 # Use custom user model
@@ -107,6 +109,20 @@ CACHES = {
         }
     }
 }
+
+# Product feed cache settings (seconds)
+PRODUCT_FEED_CACHE_NAMESPACE = os.getenv('PRODUCT_FEED_CACHE_NAMESPACE', 'products:feed')
+PRODUCT_FEED_CACHE_TTL = int(os.getenv('PRODUCT_FEED_CACHE_TTL', '300'))
+PRODUCT_TOP_SALES_CACHE_TTL = int(os.getenv('PRODUCT_TOP_SALES_CACHE_TTL', str(PRODUCT_FEED_CACHE_TTL)))
+PRODUCT_HOT_FEED_CACHE_TTL = int(os.getenv('PRODUCT_HOT_FEED_CACHE_TTL', str(PRODUCT_FEED_CACHE_TTL)))
+SECKILL_RESERVATION_EXPIRE_MINUTES = int(os.getenv('SECKILL_RESERVATION_EXPIRE_MINUTES', '10'))
+
+# Review sensitive words configuration
+REVIEW_SENSITIVE_WORDS = [
+    word.strip()
+    for word in os.getenv('REVIEW_SENSITIVE_WORDS', '傻逼,垃圾,妈的').split(',')
+    if word.strip()
+]
 
 # Email configuration
 EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')

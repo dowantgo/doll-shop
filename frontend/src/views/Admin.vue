@@ -1,6 +1,5 @@
-<template>
+﻿<template>
   <div class="admin-layout">
-    <!-- Sidebar -->
     <aside class="sidebar">
       <div class="logo">
         <h2>玩偶商城后台</h2>
@@ -9,9 +8,9 @@
         :default-active="activeMenu"
         class="admin-menu"
         router
-        background-color="#304156"
-        text-color="#bfcbd9"
-        active-text-color="#409EFF"
+        background-color="transparent"
+        text-color="#d5e3f8"
+        active-text-color="#ffffff"
       >
         <el-menu-item index="/admin/dashboard">
           <el-icon><DataLine /></el-icon>
@@ -29,6 +28,10 @@
           <el-icon><List /></el-icon>
           <span>订单管理</span>
         </el-menu-item>
+        <el-menu-item index="/admin/seckill">
+          <el-icon><Timer /></el-icon>
+          <span>秒杀管理</span>
+        </el-menu-item>
         <el-menu-item index="/admin/inventory">
           <el-icon><Box /></el-icon>
           <span>库存管理</span>
@@ -40,9 +43,7 @@
       </el-menu>
     </aside>
 
-    <!-- Main Content -->
     <div class="main-content">
-      <!-- Header -->
       <header class="admin-header">
         <div class="header-left">
           <span class="welcome">欢迎，{{ userStore.user?.username || '管理员' }}</span>
@@ -59,7 +60,6 @@
         </div>
       </header>
 
-      <!-- Content -->
       <main class="admin-main">
         <router-view />
       </main>
@@ -70,8 +70,19 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useUserStore } from '../stores/userStore'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  Box,
+  DataLine,
+  Folder,
+  Goods,
+  HomeFilled,
+  List,
+  SwitchButton,
+  Timer,
+  User
+} from '@element-plus/icons-vue'
+import { useUserStore } from '../stores/userStore'
 
 const route = useRoute()
 const router = useRouter()
@@ -88,11 +99,13 @@ const logout = () => {
     confirmButtonText: '确定',
     cancelButtonText: '取消',
     type: 'warning'
-  }).then(() => {
-    userStore.logout()
-    ElMessage.success('已退出登录')
-    router.push('/login')
-  }).catch(() => {})
+  })
+    .then(() => {
+      userStore.logout()
+      ElMessage.success('已退出登录')
+      router.push('/login')
+    })
+    .catch(() => {})
 }
 </script>
 
@@ -103,48 +116,67 @@ const logout = () => {
 }
 
 .sidebar {
-  width: 210px;
-  background: #304156;
+  width: 228px;
+  background: linear-gradient(180deg, #173453 0%, #1f3f63 48%, #173454 100%);
   position: fixed;
   height: 100vh;
   left: 0;
   top: 0;
   z-index: 100;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .logo {
-  height: 60px;
+  height: 70px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #fff;
-  border-bottom: 1px solid #1f2d3d;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .logo h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: 19px;
+  letter-spacing: 0.4px;
 }
 
 .admin-menu {
   border-right: none;
+  padding-top: 8px;
+}
+
+.admin-menu :deep(.el-menu-item) {
+  margin: 6px 10px;
+  border-radius: 10px;
+  height: 44px;
+  line-height: 44px;
+}
+
+.admin-menu :deep(.el-menu-item:hover) {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+.admin-menu :deep(.el-menu-item.is-active) {
+  background: linear-gradient(135deg, #2f7cff, #4f95ff) !important;
 }
 
 .main-content {
   flex: 1;
-  margin-left: 210px;
-  background: #f0f2f5;
+  margin-left: 228px;
+  background: linear-gradient(155deg, #f6fbff 0%, #f8f7ff 52%, #fff9f5 100%);
   min-height: 100vh;
 }
 
 .admin-header {
-  height: 60px;
-  background: #fff;
+  height: 66px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+  border-bottom: 1px solid #e6edf7;
   position: sticky;
   top: 0;
   z-index: 99;
@@ -152,7 +184,8 @@ const logout = () => {
 
 .welcome {
   font-size: 14px;
-  color: #606266;
+  color: #44566c;
+  font-weight: 600;
 }
 
 .header-right {
@@ -161,6 +194,23 @@ const logout = () => {
 }
 
 .admin-main {
-  padding: 20px;
+  padding: 18px;
+}
+
+@media (max-width: 960px) {
+  .sidebar {
+    width: 86px;
+  }
+
+  .logo h2 {
+    font-size: 12px;
+    text-align: center;
+    line-height: 1.2;
+    padding: 0 4px;
+  }
+
+  .main-content {
+    margin-left: 86px;
+  }
 }
 </style>

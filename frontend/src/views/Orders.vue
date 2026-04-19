@@ -1,10 +1,8 @@
-<template>
+﻿<template>
   <div class="orders-page">
-    <el-card shadow="never">
+    <el-card shadow="never" class="orders-card">
       <template #header>
-        <div class="header">
-          我的订单
-        </div>
+        <div class="header">我的订单</div>
       </template>
 
       <div class="filter-tabs">
@@ -18,14 +16,12 @@
       <el-table :data="orders" style="width: 100%" v-loading="loading" empty-text="暂无订单">
         <el-table-column label="订单号" prop="order_id" width="240" />
         <el-table-column label="总价" width="120">
-          <template #default="{ row }">
-            ¥{{ row.total_price }}
-          </template>
+          <template #default="{ row }">¥{{ row.total_price }}</template>
         </el-table-column>
         <el-table-column label="支付状态" width="130">
           <template #default="{ row }">
-            <el-tag :type="paymentTagType(row.payment_status)">
-              {{ row.payment_status_display || statusText(row.payment_status) }}
+            <el-tag :type="paymentTagType(row)">
+              {{ statusText(row) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -37,7 +33,7 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="收货地址" min-width="200">
+        <el-table-column label="收货地址" min-width="220">
           <template #default="{ row }">
             <div v-if="row.address_detail">
               {{ row.address_detail.province }}{{ row.address_detail.city }}{{ row.address_detail.district }}
@@ -47,14 +43,12 @@
           </template>
         </el-table-column>
         <el-table-column label="创建时间" width="170">
-          <template #default="{ row }">
-            {{ formatTime(row.created_at) }}
-          </template>
+          <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="250" fixed="right">
           <template #default="{ row }">
             <el-button
-              v-if="row.payment_status === 'pending'"
+              v-if="canPay(row)"
               size="small"
               type="primary"
               @click="openPayment(row)"
@@ -62,7 +56,7 @@
               去支付
             </el-button>
             <el-button
-              v-if="row.payment_status === 'pending'"
+              v-if="canPay(row)"
               size="small"
               type="danger"
               text
@@ -121,9 +115,7 @@ const load = async () => {
   loading.value = true
   try {
     const params = { page: 1 }
-    if (activeTab.value) {
-      params.payment_status = activeTab.value
-    }
+    if (activeTab.value) params.payment_status = activeTab.value
     const res = await orderApi.getOrders(params)
     orders.value = res?.results || []
   } catch (e) {
@@ -137,7 +129,7 @@ const handleTabChange = () => {
   load()
 }
 
-const openPayment = (row) => {
+const openPayment = row => {
   currentOrder.value = row
   paymentVisible.value = true
 }
@@ -171,24 +163,28 @@ const confirmReceive = async id => {
   }
 }
 
-const viewDetail = (row) => {
+const viewDetail = row => {
   router.push(`/order/${row.id}`)
 }
 
-const statusText = status => {
+const canPay = row => row.payment_status === 'pending' && row.status === 'pending'
+
+const statusText = row => {
+  if (row.status === 'cancelled') return '已关闭'
   const map = {
     pending: '待支付',
     paid: '已支付'
   }
-  return map[status] || status
+  return row.payment_status_display || map[row.payment_status] || row.payment_status
 }
 
-const paymentTagType = status => {
+const paymentTagType = row => {
+  if (row.status === 'cancelled') return 'info'
   const map = {
     pending: 'warning',
     paid: 'success'
   }
-  return map[status] || 'info'
+  return map[row.payment_status] || 'info'
 }
 
 const shippingText = status => {
@@ -213,7 +209,7 @@ const shippingTagType = status => {
   return map[status] || 'info'
 }
 
-const formatTime = (time) => {
+const formatTime = time => {
   if (!time) return ''
   return time.replace('T', ' ').slice(0, 19)
 }
@@ -223,14 +219,19 @@ onMounted(load)
 
 <style scoped>
 .orders-page {
-  padding: 18px;
+  padding: 8px;
 }
 
 .header {
-  font-weight: 700;
+  font-weight: 800;
+  color: #23354d;
 }
 
 .filter-tabs {
   margin-bottom: 16px;
+}
+
+.orders-card {
+  border-radius: 14px;
 }
 </style>

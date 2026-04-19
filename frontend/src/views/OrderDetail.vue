@@ -1,6 +1,6 @@
-<template>
+﻿<template>
   <div class="order-detail-page">
-    <el-card shadow="never" v-loading="loading">
+    <el-card shadow="never" v-loading="loading" class="detail-card">
       <template #header>
         <div class="header">
           <el-button text @click="router.back()">
@@ -22,9 +22,7 @@
                 {{ order.payment_status_display }}
               </el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="支付方式">
-              {{ order.payment_method_display || '-' }}
-            </el-descriptions-item>
+            <el-descriptions-item label="支付方式">{{ order.payment_method_display || '-' }}</el-descriptions-item>
             <el-descriptions-item label="订单总价">
               <span class="price">¥{{ order.total_price }}</span>
             </el-descriptions-item>
@@ -37,17 +35,13 @@
         <div class="shipping-info" v-if="order.payment_status === 'paid'">
           <h3>物流信息</h3>
           <el-descriptions :column="2" border>
-            <el-descriptions-item label="快递公司">
-              {{ order.shipping_company_display || '-' }}
-            </el-descriptions-item>
+            <el-descriptions-item label="快递公司">{{ order.shipping_company_display || '-' }}</el-descriptions-item>
             <el-descriptions-item label="物流状态">
               <el-tag :type="shippingTagType(order.shipping_status)">
                 {{ order.shipping_status_display }}
               </el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="快递单号">
-              {{ order.tracking_no || '-' }}
-            </el-descriptions-item>
+            <el-descriptions-item label="快递单号">{{ order.tracking_no || '-' }}</el-descriptions-item>
             <el-descriptions-item label="发货时间">
               {{ order.shipped_at ? formatTime(order.shipped_at) : '-' }}
             </el-descriptions-item>
@@ -75,21 +69,17 @@
                   :src="row.product_image"
                   :preview-src-list="[row.product_image]"
                   fit="cover"
-                  style="width: 60px; height: 60px;"
+                  style="width: 60px; height: 60px"
                 />
               </template>
             </el-table-column>
             <el-table-column label="商品名称" prop="product_name" min-width="200" />
             <el-table-column label="单价" width="120">
-              <template #default="{ row }">
-                ¥{{ row.price }}
-              </template>
+              <template #default="{ row }">¥{{ row.price }}</template>
             </el-table-column>
             <el-table-column label="数量" prop="quantity" width="100" />
             <el-table-column label="小计" width="120">
-              <template #default="{ row }">
-                <span class="price">¥{{ row.subtotal }}</span>
-              </template>
+              <template #default="{ row }"><span class="price">¥{{ row.subtotal }}</span></template>
             </el-table-column>
           </el-table>
         </div>
@@ -169,7 +159,7 @@ const shippingTagType = status => {
   return map[status] || 'info'
 }
 
-const formatTime = (time) => {
+const formatTime = time => {
   if (!time) return ''
   return time.replace('T', ' ').slice(0, 19)
 }
@@ -179,7 +169,11 @@ onMounted(load)
 
 <style scoped>
 .order-detail-page {
-  padding: 18px;
+  padding: 8px;
+}
+
+.detail-card {
+  border-radius: 14px;
 }
 
 .header {
@@ -189,8 +183,9 @@ onMounted(load)
 }
 
 .title {
-  font-weight: 700;
+  font-weight: 800;
   font-size: 18px;
+  color: #23354d;
 }
 
 .order-content {
@@ -205,18 +200,18 @@ onMounted(load)
 .items-info h3 {
   margin-bottom: 12px;
   font-size: 16px;
-  color: #303133;
+  color: #2c3e54;
 }
 
 .price {
   color: #f56c6c;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .actions {
   display: flex;
   justify-content: flex-end;
   padding-top: 16px;
-  border-top: 1px solid #ebeef5;
+  border-top: 1px solid #e6edf6;
 }
 </style>

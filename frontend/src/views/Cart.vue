@@ -1,22 +1,20 @@
-<template>
+﻿<template>
   <div class="cart-page">
     <el-row :gutter="16">
       <el-col :span="16">
-        <el-card shadow="never">
+        <el-card shadow="never" class="cart-card">
           <template #header>
-            <div class="header">
-              我的购物车
-            </div>
+            <div class="header">我的购物车</div>
           </template>
 
           <el-table :data="items" style="width: 100%" empty-text="购物车为空">
             <el-table-column label="商品" width="420">
               <template #default="{ row }">
                 <div class="item-cell">
-                  <img v-if="row.product_image" class="thumb" :src="row.product_image" alt="" />
+                  <img v-if="row.product_image" class="thumb" :src="row.product_image" alt="" @error="onImgError" />
                   <div class="item-info">
                     <div class="item-name" :title="row.product_name">{{ row.product_name }}</div>
-                    <div class="item-price">单价：￥{{ row.product_price }}</div>
+                    <div class="item-price">单价：¥{{ row.product_price }}</div>
                   </div>
                 </div>
               </template>
@@ -31,43 +29,29 @@
                     :max="row.product_stock || 9999"
                     size="small"
                   />
-                  <el-button
-                    size="small"
-                    @click="updateQty(row)"
-                  >
-                    更新
-                  </el-button>
-                  <el-button size="small" type="danger" text @click="removeItem(row)">
-                    移除
-                  </el-button>
+                  <el-button size="small" @click="updateQty(row)">更新</el-button>
+                  <el-button size="small" type="danger" text @click="removeItem(row)">移除</el-button>
                 </div>
               </template>
             </el-table-column>
 
             <el-table-column label="小计" width="180">
-              <template #default="{ row }">
-                ￥{{ row.subtotal }}
-              </template>
+              <template #default="{ row }">¥{{ row.subtotal }}</template>
             </el-table-column>
           </el-table>
 
           <div class="summary">
             <div>总数量：{{ totalQuantity }}</div>
-            <div class="total">合计：￥{{ totalPrice }}</div>
-            <el-button
-              :disabled="items.length === 0"
-              @click="clearCart"
-            >
-              清空购物车
-            </el-button>
+            <div class="total">合计：¥{{ totalPrice }}</div>
+            <el-button :disabled="items.length === 0" @click="clearCart">清空购物车</el-button>
           </div>
         </el-card>
       </el-col>
 
       <el-col :span="8">
-        <el-card shadow="never">
+        <el-card shadow="never" class="checkout-card">
           <template #header>
-            <div>结算</div>
+            <div class="checkout-title">结算</div>
           </template>
 
           <el-form :model="checkout" label-width="90px">
@@ -110,7 +94,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { cartApi } from '../api/cart'
@@ -124,6 +108,7 @@ const totalQuantity = ref(0)
 const totalPrice = ref('0.00')
 
 const addresses = ref([])
+const defaultImage = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320"><rect width="100%" height="100%" fill="%23f2f3f5"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%2390999f" font-size="20">No Image</text></svg>'
 
 const checkout = reactive({
   addressId: null,
@@ -132,6 +117,11 @@ const checkout = reactive({
 
 const checkoutLoading = ref(false)
 
+const onImgError = event => {
+  if (!event?.target) return
+  event.target.src = defaultImage
+}
+
 const loadCart = async () => {
   try {
     const res = await cartApi.getCart()
@@ -139,7 +129,6 @@ const loadCart = async () => {
     totalQuantity.value = res?.total_quantity || 0
     totalPrice.value = res?.total_price || '0.00'
 
-    // If there is default address or first one, pre-select for convenience.
     if (addresses.value.length && !checkout.addressId) {
       const def = addresses.value.find(a => a.is_default) || addresses.value[0]
       checkout.addressId = def?.id || null
@@ -223,11 +212,18 @@ onMounted(refreshAll)
 
 <style scoped>
 .cart-page {
-  padding: 18px;
+  padding: 8px;
 }
 
-.header {
-  font-weight: 700;
+.cart-card,
+.checkout-card {
+  border-radius: 14px;
+}
+
+.header,
+.checkout-title {
+  font-weight: 800;
+  color: #23354d;
 }
 
 .item-cell {
@@ -237,10 +233,11 @@ onMounted(refreshAll)
 }
 
 .thumb {
-  width: 64px;
-  height: 64px;
+  width: 68px;
+  height: 68px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: 8px;
+  background: #f4f7fc;
 }
 
 .item-info {
@@ -254,10 +251,12 @@ onMounted(refreshAll)
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  font-weight: 700;
+  color: #2c3a4d;
 }
 
 .item-price {
-  color: #666;
+  color: #617081;
   font-size: 12px;
 }
 
@@ -273,11 +272,23 @@ onMounted(refreshAll)
   gap: 16px;
   align-items: center;
   padding-top: 14px;
+  color: #59687c;
 }
 
 .total {
-  font-size: 16px;
-  font-weight: 700;
-  color: #ff4d4f;
+  font-size: 18px;
+  font-weight: 800;
+  color: #ff5a45;
+}
+
+@media (max-width: 992px) {
+  .cart-page {
+    padding: 0;
+  }
+
+  .summary {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
 }
 </style>

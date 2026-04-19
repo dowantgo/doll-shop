@@ -5,6 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.db.models import Sum
 
 from apps.products.models import Product, Category, ProductImage
+from apps.products.cache_utils import bump_feed_version_on_commit
 from apps.orders.models import Order
 from .models import User
 from apps.products.serializers import ProductSerializer, CategorySerializer, ProductImageSerializer
@@ -43,6 +44,18 @@ class AdminProductViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSerializer
     permission_classes = [IsAdminUser]
 
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        bump_feed_version_on_commit()
+
+    def perform_update(self, serializer):
+        super().perform_update(serializer)
+        bump_feed_version_on_commit()
+
+    def perform_destroy(self, instance):
+        super().perform_destroy(instance)
+        bump_feed_version_on_commit()
+
     @action(detail=True, methods=['post'])
     def adjust_stock(self, request, pk=None):
         """Adjust product inventory."""
@@ -52,6 +65,7 @@ class AdminProductViewSet(viewsets.ModelViewSet):
             return Response({'error': '库存值无效'}, status=status.HTTP_400_BAD_REQUEST)
         product.stock = int(new_stock)
         product.save(update_fields=['stock'])
+        bump_feed_version_on_commit()
         return Response({'message': '库存调整成功', 'stock': product.stock})
 
     @action(detail=True, methods=['post'], url_path='upload-image')
@@ -81,6 +95,7 @@ class AdminProductViewSet(viewsets.ModelViewSet):
             is_main=is_main,
         )
         serializer = ProductImageSerializer(product_image, context={'request': request})
+        bump_feed_version_on_commit()
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['delete'], url_path=r'delete-image/(?P<image_id>[^/.]+)')
@@ -94,6 +109,7 @@ class AdminProductViewSet(viewsets.ModelViewSet):
         if product_image.image:
             product_image.image.delete(save=False)
         product_image.delete()
+        bump_feed_version_on_commit()
         return Response({'message': '图片删除成功'})
 
     @action(detail=True, methods=['post'], url_path=r'set-main-image/(?P<image_id>[^/.]+)')
@@ -107,6 +123,7 @@ class AdminProductViewSet(viewsets.ModelViewSet):
         ProductImage.objects.filter(product_id=pk).update(is_main=False)
         product_image.is_main = True
         product_image.save(update_fields=['is_main'])
+        bump_feed_version_on_commit()
         return Response({'message': '主图设置成功'})
 
 

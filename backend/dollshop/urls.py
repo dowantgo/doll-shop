@@ -12,8 +12,10 @@ urlpatterns = [
     # API Routes
     path('api/users/', include('apps.users.urls')),
     path('api/products/', include('apps.products.urls')),
+    path('api/reviews/', include('apps.reviews.urls')),
     path('api/orders/', include('apps.orders.urls')),
     path('api/cart/', include('apps.cart.urls')),
+    path('api/seckill/', include('apps.seckill.urls')),
     path('api/admin/', include('apps.users.admin_urls')),
     path('api/pay/', include('apps.payment.urls')),
 ]
