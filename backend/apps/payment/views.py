@@ -283,6 +283,8 @@ class CreatePaymentView(APIView):
 
         if order.payment_status == 'paid':
             return Response({'error': '订单已支付'}, status=status.HTTP_400_BAD_REQUEST)
+        if order.status == 'cancelled':
+            return Response({'error': '已取消订单不可创建支付'}, status=status.HTTP_400_BAD_REQUEST)
 
         txn = PaymentTransaction.objects.filter(order=order, status='pending').order_by('-created_at').first()
         if not txn:
@@ -400,6 +402,11 @@ class MockPayView(APIView):
             return Response({'message': '已支付'})
         if txn.status in ('closed', 'expired', 'failed'):
             return Response({'error': '支付单已关闭或失效'}, status=status.HTTP_400_BAD_REQUEST)
+        if txn.order.status == 'cancelled':
+            if txn.status == 'pending':
+                txn.status = 'closed'
+                txn.save(update_fields=['status', 'updated_at'])
+            return Response({'error': '已取消订单不能继续支付'}, status=status.HTTP_400_BAD_REQUEST)
 
         _mark_paid(txn)
         return Response({'message': '支付成功', 'status': 'success'})

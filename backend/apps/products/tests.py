@@ -1,7 +1,9 @@
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APITestCase, APITransactionTestCase
 
+from apps.products.cache_utils import make_feed_cache_key
 from apps.products.models import Product
 
 
@@ -59,3 +61,35 @@ class AdminProductValidationTests(APITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         self.assertEqual(Product.objects.count(), 1)
+
+
+class AdminProductFeedCacheInvalidationTests(APITransactionTestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.admin = user_model.objects.create_user(
+            username='admin_feed_tester',
+            password='TestPass123!',
+            role='admin',
+        )
+        self.client.force_authenticate(user=self.admin)
+        self.product = Product.objects.create(
+            name='Feed Cache Product',
+            description='feed test',
+            price='19.90',
+            stock=10,
+            status=True,
+        )
+
+    def test_admin_update_product_bumps_feed_cache_version(self):
+        cache.clear()
+        before_key = make_feed_cache_key('hot-feed', 10)
+
+        resp = self.client.patch(
+            f'/api/admin/products/{self.product.id}/',
+            {'price': '29.90'},
+            format='json',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        after_key = make_feed_cache_key('hot-feed', 10)
+        self.assertNotEqual(before_key, after_key)
