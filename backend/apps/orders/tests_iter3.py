@@ -9,6 +9,7 @@ from rest_framework.test import APITestCase
 from apps.cart.models import CartItem
 from apps.coupons.models import CouponTemplate, UserCoupon
 from apps.orders.models import Order, OrderItem
+from apps.payment.models import PaymentTransaction
 from apps.products.models import Product
 from apps.users.models import Address
 
@@ -145,3 +146,37 @@ class Iter3TradeFlowTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertIn('provider', resp.data)
         self.assertIn('traces', resp.data)
+
+    def test_price_preview_logs_payment_probe_id(self):
+        pending_order = Order.objects.create(
+            user=self.user,
+            total_price=Decimal('100.00'),
+            address=self.address,
+            payment_status='pending',
+            status='pending',
+        )
+        OrderItem.objects.create(order=pending_order, product=self.product, quantity=1, price=Decimal('100.00'))
+        txn = PaymentTransaction.objects.create(
+            order=pending_order,
+            payment_method='mock',
+            out_trade_no='PAYPROBETEST1234',
+            amount=Decimal('100.00'),
+            status='pending',
+            expire_time=timezone.now() + timedelta(minutes=10),
+        )
+
+        self.client.force_authenticate(user=self.user)
+        with self.assertLogs('apps.orders.views', level='INFO') as captured:
+            resp = self.client.post(
+                '/api/orders/orders/price-preview/',
+                {
+                    'coupon_id': None,
+                    'items': [{'product_id': self.product.id, 'quantity': 1}],
+                },
+                format='json',
+            )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        joined = '\n'.join(captured.output)
+        self.assertIn('payment_id=', joined)
+        self.assertIn(txn.out_trade_no, joined)

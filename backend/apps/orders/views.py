@@ -86,6 +86,25 @@ class OrderViewSet(viewsets.ModelViewSet):
             'coupon_error': coupon_error,
         }
 
+    def _pending_payment_probe(self, user):
+        """
+        Return a lightweight payment_id probe value for observability checks.
+        Uses user's latest pending transaction out_trade_no when available.
+        """
+        try:
+            from apps.payment.models import PaymentTransaction
+
+            txn = (
+                PaymentTransaction.objects
+                .filter(order__user=user, status='pending')
+                .order_by('-created_at')
+                .only('out_trade_no')
+                .first()
+            )
+            return txn.out_trade_no if txn else ''
+        except Exception:
+            return ''
+
     def list(self, request, *args, **kwargs):
         self._cleanup_expired_orders()
         return super().list(request, *args, **kwargs)
@@ -312,12 +331,14 @@ class OrderViewSet(viewsets.ModelViewSet):
                 return Response({'error': 'Coupon not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         pricing = self._build_pricing_preview(subtotal_amount=subtotal, user_coupon=user_coupon)
+        payment_id_probe = self._pending_payment_probe(request.user)
         logger.info(
-            'price_preview user_id=%s coupon_id=%s subtotal=%s final_payable=%s',
+            'price_preview user_id=%s coupon_id=%s subtotal=%s final_payable=%s payment_id=%s',
             request.user.id,
             coupon_id,
             pricing['subtotal_amount'],
             pricing['final_payable_amount'],
+            payment_id_probe,
         )
         return Response(
             {
