@@ -32,6 +32,14 @@
           <el-icon><Timer /></el-icon>
           <span>秒杀管理</span>
         </el-menu-item>
+        <el-menu-item index="/admin/coupons">
+          <el-icon><Ticket /></el-icon>
+          <span>优惠券管理</span>
+        </el-menu-item>
+        <el-menu-item index="/admin/refunds">
+          <el-icon><Money /></el-icon>
+          <span>退款审核</span>
+        </el-menu-item>
         <el-menu-item index="/admin/inventory">
           <el-icon><Box /></el-icon>
           <span>库存管理</span>
@@ -78,7 +86,9 @@ import {
   Goods,
   HomeFilled,
   List,
+  Money,
   SwitchButton,
+  Ticket,
   Timer,
   User
 } from '@element-plus/icons-vue'

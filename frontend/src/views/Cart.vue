@@ -55,6 +55,46 @@
           </template>
 
           <el-form :model="checkout" label-width="90px">
+            <el-form-item label="优惠券">
+              <el-select
+                v-model="checkout.couponId"
+                placeholder="可选，最多使用1张"
+                style="width: 100%"
+                clearable
+                :disabled="coupons.length === 0"
+                @change="loadPreview"
+              >
+                <el-option
+                  v-for="c in coupons"
+                  :key="c.id"
+                  :value="c.id"
+                  :label="`${c.template.name}（减¥${c.template.discount_amount}，满¥${c.template.min_spend_amount}）`"
+                />
+              </el-select>
+            </el-form-item>
+
+            <el-form-item label="优惠试算">
+              <div class="preview-box" v-loading="previewLoading">
+                <div class="preview-row">
+                  <span>商品总额</span>
+                  <strong>¥{{ preview.subtotal_amount || totalPrice }}</strong>
+                </div>
+                <div class="preview-row">
+                  <span>满减优惠</span>
+                  <strong>-¥{{ preview.full_reduction_amount || '0.00' }}</strong>
+                </div>
+                <div class="preview-row">
+                  <span>券优惠</span>
+                  <strong>-¥{{ preview.coupon_discount_amount || '0.00' }}</strong>
+                </div>
+                <div class="preview-row total-row">
+                  <span>应付总额</span>
+                  <strong>¥{{ preview.final_payable_amount || totalPrice }}</strong>
+                </div>
+                <div v-if="preview.coupon_error" class="preview-error">{{ preview.coupon_error }}</div>
+              </div>
+            </el-form-item>
+
             <el-form-item label="收货地址">
               <el-select
                 v-model="checkout.addressId"
@@ -98,6 +138,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { cartApi } from '../api/cart'
+import { couponApi } from '../api/coupon'
 import { userApi } from '../api/user'
 import { orderApi } from '../api/order'
 
@@ -108,11 +149,21 @@ const totalQuantity = ref(0)
 const totalPrice = ref('0.00')
 
 const addresses = ref([])
+const coupons = ref([])
+const preview = ref({
+  subtotal_amount: '0.00',
+  full_reduction_amount: '0.00',
+  coupon_discount_amount: '0.00',
+  final_payable_amount: '0.00',
+  coupon_error: ''
+})
+const previewLoading = ref(false)
 const defaultImage = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320"><rect width="100%" height="100%" fill="%23f2f3f5"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%2390999f" font-size="20">No Image</text></svg>'
 
 const checkout = reactive({
   addressId: null,
-  remark: ''
+  remark: '',
+  couponId: null
 })
 
 const checkoutLoading = ref(false)
@@ -151,8 +202,54 @@ const loadAddresses = async () => {
   }
 }
 
+const loadCoupons = async () => {
+  try {
+    const res = await couponApi.getMyCoupons({ status: 'unused' })
+    coupons.value = res?.results || res || []
+  } catch (e) {
+    coupons.value = []
+  }
+}
+
+const loadPreview = async () => {
+  if (!items.value.length) {
+    preview.value = {
+      subtotal_amount: '0.00',
+      full_reduction_amount: '0.00',
+      coupon_discount_amount: '0.00',
+      final_payable_amount: '0.00',
+      coupon_error: ''
+    }
+    return
+  }
+  previewLoading.value = true
+  try {
+    const res = await couponApi.pricePreview({
+      coupon_id: checkout.couponId || null
+    })
+    preview.value = {
+      subtotal_amount: res?.subtotal_amount || totalPrice.value || '0.00',
+      full_reduction_amount: res?.full_reduction_amount || '0.00',
+      coupon_discount_amount: res?.coupon_discount_amount || '0.00',
+      final_payable_amount: res?.final_payable_amount || totalPrice.value || '0.00',
+      coupon_error: res?.coupon_error || ''
+    }
+  } catch (e) {
+    preview.value = {
+      subtotal_amount: totalPrice.value || '0.00',
+      full_reduction_amount: '0.00',
+      coupon_discount_amount: '0.00',
+      final_payable_amount: totalPrice.value || '0.00',
+      coupon_error: e?.response?.data?.error || ''
+    }
+  } finally {
+    previewLoading.value = false
+  }
+}
+
 const refreshAll = async () => {
-  await Promise.all([loadAddresses(), loadCart()])
+  await Promise.all([loadAddresses(), loadCoupons(), loadCart()])
+  await loadPreview()
 }
 
 const updateQty = async row => {
@@ -160,6 +257,7 @@ const updateQty = async row => {
     await cartApi.updateQuantity(row.id, row.quantity)
     ElMessage.success('数量已更新')
     await loadCart()
+    await loadPreview()
   } catch (e) {
     ElMessage.error(e?.response?.data?.error || '更新失败')
   }
@@ -170,6 +268,7 @@ const removeItem = async row => {
     await cartApi.removeFromCart(row.id)
     ElMessage.success('已移除')
     await loadCart()
+    await loadPreview()
   } catch (e) {
     ElMessage.error(e?.response?.data?.error || '移除失败')
   }
@@ -180,6 +279,7 @@ const clearCart = async () => {
     await cartApi.clearCart()
     ElMessage.success('购物车已清空')
     await loadCart()
+    await loadPreview()
   } catch (e) {
     ElMessage.error(e?.response?.data?.error || '清空失败')
   }
@@ -188,14 +288,20 @@ const clearCart = async () => {
 const createOrder = async () => {
   checkoutLoading.value = true
   try {
-    await orderApi.createOrder({
+    const orderRes = await orderApi.createOrder({
       address_id: checkout.addressId,
       remark: checkout.remark || ''
     })
+    if (checkout.couponId) {
+      await couponApi.applyCoupon(orderRes.order_id, { coupon_id: checkout.couponId })
+    }
     ElMessage.success('订单已生成')
     checkout.remark = ''
+    checkout.couponId = null
     router.push('/orders')
     await loadCart()
+    await loadCoupons()
+    await loadPreview()
   } catch (e) {
     ElMessage.error(e?.response?.data?.error || '生成订单失败')
   } finally {
@@ -279,6 +385,37 @@ onMounted(refreshAll)
   font-size: 18px;
   font-weight: 800;
   color: #ff5a45;
+}
+
+.preview-box {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #e7eef9;
+  border-radius: 10px;
+  background: #f9fbff;
+}
+
+.preview-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: #4b5f77;
+}
+
+.preview-row:last-child {
+  margin-bottom: 0;
+}
+
+.total-row {
+  padding-top: 6px;
+  border-top: 1px dashed #d6e3f7;
+  color: #22334b;
+}
+
+.preview-error {
+  margin-top: 8px;
+  color: #d03050;
+  font-size: 12px;
 }
 
 @media (max-width: 992px) {

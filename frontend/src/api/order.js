@@ -29,5 +29,10 @@ export const orderApi = {
   // Confirm delivery
   confirmDelivery(id) {
     return request.post(`/orders/orders/${id}/confirm_delivery/`)
+  },
+
+  // Logistics timeline
+  getLogistics(id) {
+    return request.get(`/orders/${id}/logistics/`)
   }
 }

@@ -118,5 +118,30 @@ export const adminApi = {
   },
   getSeckillActionLogs(params) {
     return request.get('/admin/seckill-action-logs/', { params })
+  },
+
+  // Coupons
+  getCouponTemplates(params) {
+    return request.get('/admin/coupon-templates/', { params })
+  },
+  createCouponTemplate(data) {
+    return request.post('/admin/coupon-templates/', data)
+  },
+  updateCouponTemplate(id, data) {
+    return request.put(`/admin/coupon-templates/${id}/`, data)
+  },
+  deleteCouponTemplate(id) {
+    return request.delete(`/admin/coupon-templates/${id}/`)
+  },
+  issueCoupons(data) {
+    return request.post('/admin/coupon-issue/', data)
+  },
+
+  // Refunds
+  getRefunds(params) {
+    return request.get('/admin/refunds/', { params })
+  },
+  reviewRefund(id, data) {
+    return request.patch(`/admin/refunds/${id}/review/`, data)
   }
 }
