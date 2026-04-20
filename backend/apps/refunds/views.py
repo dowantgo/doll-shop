@@ -55,41 +55,48 @@ class RefundViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.G
         reason = serializer.validated_data.get('reason', '')
         idempotency_key = serializer.validated_data.get('idempotency_key', '').strip()
 
-        if idempotency_key:
-            exists = RefundRequest.objects.filter(user=request.user, idempotency_key=idempotency_key).first()
-            if exists:
-                return Response(RefundRequestSerializer(exists).data)
+        with transaction.atomic():
+            if idempotency_key:
+                exists = (
+                    RefundRequest.objects
+                    .select_for_update()
+                    .filter(user=request.user, idempotency_key=idempotency_key)
+                    .first()
+                )
+                if exists:
+                    return Response(RefundRequestSerializer(exists).data)
 
-        order, order_item, requested_amount = validate_refund_request(
-            user=request.user,
-            order_id=order_id,
-            order_item_id=order_item_id,
-            quantity=quantity,
-        )
+            order, order_item, requested_amount = validate_refund_request(
+                user=request.user,
+                order_id=order_id,
+                order_item_id=order_item_id,
+                quantity=quantity,
+            )
 
-        refund = RefundRequest.objects.create(
-            user=request.user,
-            order=order,
-            order_item=order_item,
-            quantity=quantity,
-            reason=reason,
-            requested_amount=requested_amount,
-            approved_amount=requested_amount,
-            status=RefundRequest.STATUS_PENDING,
-            idempotency_key=idempotency_key,
-        )
-        _create_audit_log(
-            refund=refund,
-            operator=request.user,
-            action='create',
-            note=reason,
-            before_data={},
-            after_data={
-                'status': refund.status,
-                'quantity': refund.quantity,
-                'requested_amount': str(refund.requested_amount),
-            },
-        )
+            refund = RefundRequest.objects.create(
+                user=request.user,
+                order=order,
+                order_item=order_item,
+                quantity=quantity,
+                reason=reason,
+                requested_amount=requested_amount,
+                approved_amount=requested_amount,
+                status=RefundRequest.STATUS_PENDING,
+                idempotency_key=idempotency_key,
+            )
+            _create_audit_log(
+                refund=refund,
+                operator=request.user,
+                action='create',
+                note=reason,
+                before_data={},
+                after_data={
+                    'status': refund.status,
+                    'quantity': refund.quantity,
+                    'requested_amount': str(refund.requested_amount),
+                },
+            )
+
         return Response(RefundRequestSerializer(refund).data, status=status.HTTP_201_CREATED)
 
 

@@ -54,8 +54,10 @@ class RefundRequestSerializer(serializers.ModelSerializer):
 
 
 def validate_refund_request(*, user, order_id: str, order_item_id: int, quantity: int):
+    # Must be called inside transaction.atomic() so select_for_update can serialize
+    # concurrent refund creation requests on the same order item.
     try:
-        order = Order.objects.prefetch_related('items').get(order_id=order_id, user=user)
+        order = Order.objects.select_for_update().prefetch_related('items').get(order_id=order_id, user=user)
     except Order.DoesNotExist:
         raise serializers.ValidationError('Order not found.')
 
@@ -63,7 +65,12 @@ def validate_refund_request(*, user, order_id: str, order_item_id: int, quantity
         raise serializers.ValidationError('Only paid orders can request refund.')
 
     try:
-        order_item = OrderItem.objects.select_related('order', 'product').get(id=order_item_id, order=order)
+        order_item = (
+            OrderItem.objects
+            .select_for_update()
+            .select_related('order', 'product')
+            .get(id=order_item_id, order=order)
+        )
     except OrderItem.DoesNotExist:
         raise serializers.ValidationError('Order item not found.')
 
