@@ -136,13 +136,26 @@ class OrderViewSet(viewsets.ModelViewSet):
                     order.status = 'cancelled'
                     order.save(update_fields=['status', 'updated_at'])
 
-                    snapshot = getattr(order, 'discount_snapshot', None)
+                    snapshot = (
+                        OrderDiscountSnapshot.objects
+                        .select_for_update()
+                        .select_related('user_coupon')
+                        .filter(order=order)
+                        .first()
+                    )
                     if snapshot and snapshot.user_coupon and snapshot.user_coupon.status == UserCoupon.STATUS_LOCKED:
                         snapshot.user_coupon.status = UserCoupon.STATUS_UNUSED
                         snapshot.user_coupon.locked_at = None
                         snapshot.user_coupon.save(update_fields=['status', 'locked_at', 'used_at'])
+                        logger.info(
+                            'expired_order_release_coupon order_id=%s coupon_id=%s coupon_no=%s',
+                            order.order_id,
+                            snapshot.user_coupon_id,
+                            snapshot.user_coupon.coupon_no,
+                        )
                 if has_sales_change:
                     bump_feed_version_on_commit()
+                logger.info('expired_order_cancelled order_id=%s user_id=%s', order.order_id, order.user_id)
             except Exception:
                 logger.exception(
                     'Failed to cleanup expired order id=%s order_id=%s created_at=%s fallback_expired_time=%s',
@@ -227,6 +240,13 @@ class OrderViewSet(viewsets.ModelViewSet):
                 )
 
             bump_feed_version_on_commit()
+            logger.info(
+                'order_created order_id=%s user_id=%s total_price=%s item_count=%s',
+                order.order_id,
+                request.user.id,
+                order.total_price,
+                order.items.count(),
+            )
             serializer = OrderSerializer(order, context={'request': request})
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -292,6 +312,13 @@ class OrderViewSet(viewsets.ModelViewSet):
                 return Response({'error': 'Coupon not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         pricing = self._build_pricing_preview(subtotal_amount=subtotal, user_coupon=user_coupon)
+        logger.info(
+            'price_preview user_id=%s coupon_id=%s subtotal=%s final_payable=%s',
+            request.user.id,
+            coupon_id,
+            pricing['subtotal_amount'],
+            pricing['final_payable_amount'],
+        )
         return Response(
             {
                 'items': normalized_items,
@@ -371,6 +398,14 @@ class OrderViewSet(viewsets.ModelViewSet):
 
             order.total_price = updated_snapshot.final_payable_amount
             order.save(update_fields=['total_price', 'updated_at'])
+            logger.info(
+                'coupon_applied order_id=%s user_id=%s coupon_id=%s coupon_no=%s final_payable=%s',
+                order.order_id,
+                request.user.id,
+                user_coupon.id if user_coupon else '',
+                user_coupon.coupon_no if user_coupon else '',
+                updated_snapshot.final_payable_amount,
+            )
 
         return Response(
             {
@@ -382,13 +417,19 @@ class OrderViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
-        order = self.get_object()
-
-        if order.payment_status != 'pending':
-            return Response({'error': 'Only pending payment orders can be cancelled.'}, status=status.HTTP_400_BAD_REQUEST)
-
         try:
             with transaction.atomic():
+                order = (
+                    Order.objects
+                    .select_for_update()
+                    .prefetch_related('items')
+                    .get(pk=pk, user=request.user)
+                )
+                if order.payment_status != 'pending':
+                    return Response({'error': 'Only pending payment orders can be cancelled.'}, status=status.HTTP_400_BAD_REQUEST)
+
+                released_coupon_id = ''
+                released_coupon_no = ''
                 for item in order.items.all():
                     if item.product:
                         product = Product.objects.select_for_update().get(id=item.product.id)
@@ -419,13 +460,28 @@ class OrderViewSet(viewsets.ModelViewSet):
                 order.payment_status = 'pending'
                 order.save()
 
-                snapshot = getattr(order, 'discount_snapshot', None)
+                snapshot = (
+                    OrderDiscountSnapshot.objects
+                    .select_for_update()
+                    .select_related('user_coupon')
+                    .filter(order=order)
+                    .first()
+                )
                 if snapshot and snapshot.user_coupon and snapshot.user_coupon.status == UserCoupon.STATUS_LOCKED:
                     snapshot.user_coupon.status = UserCoupon.STATUS_UNUSED
                     snapshot.user_coupon.locked_at = None
                     snapshot.user_coupon.save(update_fields=['status', 'locked_at', 'used_at'])
+                    released_coupon_id = snapshot.user_coupon_id
+                    released_coupon_no = snapshot.user_coupon.coupon_no
 
             bump_feed_version_on_commit()
+            logger.info(
+                'order_cancelled order_id=%s user_id=%s released_coupon_id=%s released_coupon_no=%s',
+                order.order_id,
+                request.user.id,
+                released_coupon_id,
+                released_coupon_no,
+            )
             return Response({'message': 'Order cancelled and stock restored.'})
         except Exception as e:
             return Response({'error': f'Cancel order failed: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
@@ -481,6 +537,15 @@ class OrderViewSet(viewsets.ModelViewSet):
     def logistics(self, request, pk=None):
         order = self.get_object()
         if order.payment_status != 'paid':
+            logger.info(
+                'logistics_query order_id=%s user_id=%s payment_status=%s tracking_no=%s provider=%s available=%s',
+                order.order_id,
+                request.user.id,
+                order.payment_status,
+                order.tracking_no,
+                'none',
+                False,
+            )
             return Response(
                 {
                     'order_id': order.order_id,
@@ -492,6 +557,15 @@ class OrderViewSet(viewsets.ModelViewSet):
 
         provider = get_logistics_provider()
         result = provider.query(order)
+        logger.info(
+            'logistics_query order_id=%s user_id=%s payment_status=%s tracking_no=%s provider=%s available=%s',
+            order.order_id,
+            request.user.id,
+            order.payment_status,
+            order.tracking_no,
+            result.provider,
+            result.available,
+        )
         return Response(
             {
                 'order_id': order.order_id,

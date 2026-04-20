@@ -105,6 +105,13 @@ def _mark_paid(txn: PaymentTransaction, trade_no: str = '') -> None:
         changed = True
     if changed:
         order.save()
+    logger.info(
+        'payment_mark_paid payment_id=%s order_id=%s trade_no=%s payment_method=%s',
+        txn.out_trade_no,
+        order.order_id,
+        txn.trade_no or '',
+        txn.payment_method,
+    )
 
     snapshot = getattr(order, 'discount_snapshot', None)
     if snapshot and snapshot.user_coupon and snapshot.user_coupon.status != 'used':
@@ -194,6 +201,12 @@ def run_reconcile():
                     'message': str(exc),
                 }
             )
+            logger.warning(
+                'payment_reconcile_error payment_id=%s order_id=%s action=query error=%s',
+                candidate.out_trade_no,
+                candidate.order.order_id if getattr(candidate, 'order', None) else '',
+                str(exc),
+            )
             continue
 
         if trade_status in ('TRADE_SUCCESS', 'TRADE_FINISHED'):
@@ -217,6 +230,12 @@ def run_reconcile():
                     ]
                 )
             fixed_paid += 1
+            logger.info(
+                'payment_reconcile_fixed_paid payment_id=%s order_id=%s trade_no=%s',
+                candidate.out_trade_no,
+                candidate.order.order_id if getattr(candidate, 'order', None) else '',
+                trade_no,
+            )
             continue
 
         if trade_status == 'TRADE_CLOSED':
@@ -242,6 +261,11 @@ def run_reconcile():
                         ]
                     )
             closed += 1
+            logger.info(
+                'payment_reconcile_closed payment_id=%s order_id=%s',
+                candidate.out_trade_no,
+                candidate.order.order_id if getattr(candidate, 'order', None) else '',
+            )
             continue
 
         # Remote still pending or unknown state. Record retry metadata and leave local pending.
@@ -262,8 +286,14 @@ def run_reconcile():
                 'message': 'Payment not settled yet.',
             }
         )
+        logger.info(
+            'payment_reconcile_retry payment_id=%s order_id=%s trade_status=%s',
+            candidate.out_trade_no,
+            candidate.order.order_id if getattr(candidate, 'order', None) else '',
+            trade_status or 'UNKNOWN',
+        )
 
-    return {
+    summary = {
         'scanned': scanned,
         'fixed_paid': fixed_paid,
         'closed': closed,
@@ -271,6 +301,8 @@ def run_reconcile():
         'skipped': skipped,
         'errors': errors,
     }
+    logger.info('payment_reconcile_summary %s', summary)
+    return summary
 
 
 class CreatePaymentView(APIView):
@@ -327,6 +359,13 @@ class CreatePaymentView(APIView):
 
             txn.qr_code = qr_code
             txn.save(update_fields=['qr_code', 'updated_at'])
+            logger.info(
+                'payment_created payment_id=%s order_id=%s payment_method=%s amount=%s',
+                txn.out_trade_no,
+                order.order_id,
+                payment_method,
+                txn.amount,
+            )
 
             # 生成二维码图片
             qr_code_image = _generate_qr_code_image(qr_code)
@@ -384,6 +423,13 @@ class PaymentStatusView(APIView):
             'expired': 'closed',
             'pending': 'pending',
         }
+        logger.info(
+            'payment_status payment_id=%s order_id=%s user_id=%s status=%s',
+            txn.out_trade_no,
+            txn.order.order_id,
+            request.user.id,
+            status_map.get(txn.status, 'pending'),
+        )
 
         return Response(
             {
@@ -417,6 +463,12 @@ class MockPayView(APIView):
             return Response({'error': '已取消订单不能继续支付'}, status=status.HTTP_400_BAD_REQUEST)
 
         _mark_paid(txn)
+        logger.info(
+            'mock_pay_success payment_id=%s order_id=%s user_id=%s',
+            txn.out_trade_no,
+            txn.order.order_id,
+            request.user.id,
+        )
         return Response({'message': '支付成功', 'status': 'success'})
 
 
@@ -437,6 +489,12 @@ class ClosePaymentView(APIView):
 
         txn.status = 'closed'
         txn.save(update_fields=['status', 'updated_at'])
+        logger.info(
+            'payment_closed payment_id=%s order_id=%s user_id=%s',
+            txn.out_trade_no,
+            txn.order.order_id,
+            request.user.id,
+        )
         return Response({'message': '支付单已关闭', 'status': 'closed'})
 
 
@@ -466,6 +524,13 @@ class PaymentQueryView(APIView):
                     txn.refresh_from_db()
             except PaymentError as exc:
                 alipay_info = {'error': str(exc)}
+        logger.info(
+            'payment_query payment_id=%s order_id=%s user_id=%s status=%s',
+            txn.out_trade_no,
+            txn.order.order_id,
+            request.user.id,
+            txn.status,
+        )
 
         return Response(
             {
@@ -504,8 +569,19 @@ class AliPayNotifyView(View):
 
         if trade_status in ("TRADE_SUCCESS", "TRADE_FINISHED"):
             _mark_paid(txn, trade_no)
+            logger.info(
+                'alipay_notify_paid payment_id=%s order_id=%s trade_no=%s',
+                txn.out_trade_no,
+                txn.order.order_id,
+                trade_no,
+            )
         elif trade_status == 'TRADE_CLOSED' and txn.status != 'paid':
             txn.status = 'closed'
             txn.save(update_fields=['status', 'updated_at'])
+            logger.info(
+                'alipay_notify_closed payment_id=%s order_id=%s',
+                txn.out_trade_no,
+                txn.order.order_id,
+            )
 
         return HttpResponse('success')

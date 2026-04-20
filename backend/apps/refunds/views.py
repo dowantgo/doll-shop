@@ -1,3 +1,5 @@
+import logging
+
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
@@ -12,6 +14,8 @@ from .serializers import (
     RefundReviewSerializer,
     validate_refund_request,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class IsAdminUser(IsAuthenticated):
@@ -64,6 +68,13 @@ class RefundViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.G
                     .first()
                 )
                 if exists:
+                    logger.info(
+                        'refund_idempotent_hit refund_no=%s order_id=%s user_id=%s idem_key=%s',
+                        exists.refund_no,
+                        exists.order.order_id,
+                        request.user.id,
+                        idempotency_key,
+                    )
                     return Response(RefundRequestSerializer(exists).data)
 
             order, order_item, requested_amount = validate_refund_request(
@@ -95,6 +106,14 @@ class RefundViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.G
                     'quantity': refund.quantity,
                     'requested_amount': str(refund.requested_amount),
                 },
+            )
+            logger.info(
+                'refund_created refund_no=%s order_id=%s order_item_id=%s user_id=%s requested_amount=%s',
+                refund.refund_no,
+                refund.order.order_id,
+                refund.order_item_id,
+                request.user.id,
+                refund.requested_amount,
             )
 
         return Response(RefundRequestSerializer(refund).data, status=status.HTTP_201_CREATED)
@@ -148,6 +167,13 @@ class AdminRefundViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
                     before_data=before_data,
                     after_data={'status': refund.status},
                 )
+                logger.info(
+                    'refund_reviewed refund_no=%s order_id=%s action=reject operator_id=%s status=%s',
+                    refund.refund_no,
+                    refund.order.order_id,
+                    request.user.id,
+                    refund.status,
+                )
                 return Response(RefundRequestSerializer(refund).data)
 
             refund.status = RefundRequest.STATUS_APPROVED
@@ -176,6 +202,13 @@ class AdminRefundViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
                     'status': refund.status,
                     'processed_at': refund.processed_at.isoformat() if refund.processed_at else '',
                 },
+            )
+            logger.info(
+                'refund_reviewed refund_no=%s order_id=%s action=approve operator_id=%s status=%s',
+                refund.refund_no,
+                refund.order.order_id,
+                request.user.id,
+                refund.status,
             )
 
         return Response(RefundRequestSerializer(refund).data)
