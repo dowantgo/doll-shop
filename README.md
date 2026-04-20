@@ -1,36 +1,40 @@
-﻿# 玩偶商城（Doll Shop）
+# 玩偶商城（Doll Shop）
 
-一个基于 **Vue 3 + Django REST Framework** 的全栈电商项目。
-
-当前主线能力已覆盖：账号体系、商品浏览、购物车、订单、支付、评价互动、秒杀专区、后台管理与测试文档沉淀。
+一个基于 **Vue 3 + Django REST Framework** 的前后端分离电商项目。  
+当前代码主线已进入 **Iter3（交易与履约增强）**，覆盖优惠券、部分退款、支付补偿、物流轨迹等能力。
 
 ## 当前版本
-- 分支建议：`iter2/main`
-- 文档口径：第二次迭代（Iter2）
+- 推荐开发分支：`iter3/main`
+- 文档主入口：
+  - `docs/requirements/iter3/第三个迭代需求.md`
+  - `docs/architecture/架构文档.md`
+  - `docs/architecture/业务功能与接口文档.md`
+  - `docs/architecture/数据库设计文档.md`
 
 ## 功能总览
 
 ### 用户端
 - 登录/注册/忘记密码（图片验证码 + 邮箱验证码）
-- 商品首页：搜索、分类筛选、热榜轮播、销量排行
-- 商品详情：查看详情、加购、查看/发布评价、评价回复
-- 购物车：数量调整、移除、清空
-- 订单：下单、查看列表/详情、取消待支付
-- 支付：支付宝/Mock 创建支付，查询状态，关闭支付单
-- 秒杀：秒杀专区、预占、基于预占下单、我的预占记录
-- 个人中心：用户信息与收货地址管理
+- 商品首页（搜索、分类筛选、热榜轮播、销量排行）
+- 商品详情（加购、评价、回复）
+- 购物车（数量调整、移除、清空）
+- 订单（下单、列表、详情、取消）
+- 支付（支付宝/Mock、状态查询、关闭）
+- 秒杀专区（活动浏览、预占、秒杀下单、预占记录）
+- 优惠券（领取、试算、应用到待支付订单）
+- 退款（按订单项数量发起部分退款、查看退款进度）
+- 物流轨迹（订单详情查看发货轨迹）
 
 ### 管理端
 - 仪表盘统计
 - 商品管理（含图片上传、库存调整）
 - 分类管理
-- 订单管理（发货、状态流转）
-- 用户管理（启用/禁用、角色切换）
-- 秒杀管理：
-  - 活动管理（支持同组多商品）
-  - 状态管理（draft/preheating/online/ended/offline）
-  - 秒杀价格/库存调整
-  - 预占记录与操作日志
+- 用户管理
+- 订单管理（发货、物流状态维护）
+- 秒杀管理（活动、库存、价格、日志）
+- 优惠券管理（模板管理、发券）
+- 退款审核（同意/拒绝 + 审计日志）
+- 支付补偿（手工触发 + 定时任务自动补偿）
 
 ## 技术栈
 
@@ -49,7 +53,8 @@
 - django-filter
 - django-cors-headers
 - MySQL
-- Redis（缓存/验证码/排行榜等场景）
+- Redis
+- Celery + Celery Beat
 - python-alipay-sdk
 
 ## 目录结构（核心）
@@ -68,7 +73,9 @@ shop/
 │  │  ├─ orders/
 │  │  ├─ payment/
 │  │  ├─ reviews/
-│  │  └─ seckill/
+│  │  ├─ seckill/
+│  │  ├─ coupons/
+│  │  └─ refunds/
 │  ├─ dollshop/
 │  ├─ manage.py
 │  ├─ requirements.txt
@@ -81,11 +88,10 @@ shop/
 
 ## 快速启动
 
-详细步骤见 [QUICK_START.md](QUICK_START.md)。
+详细步骤见 `QUICK_START.md`。
 
-最小启动流程：
+### 1) 后端
 
-### 1) 启动后端
 ```bash
 cd backend
 python -m venv venv
@@ -101,47 +107,76 @@ python init_data_runner.py
 python manage.py runserver 0.0.0.0:8000
 ```
 
-### 2) 启动前端
+### 2) 前端
+
 ```bash
 cd ../frontend
 npm install
 npm run dev
 ```
 
-### 3) 访问
-- 前端：<http://localhost:5173>
-- 后端 API 根：<http://localhost:8000/api/>
-- Django Admin：<http://localhost:8000/admin/>
+### 3) 可选：启动补偿任务（Iter3 推荐）
+
+```bash
+# 终端A
+cd backend
+venv\Scripts\activate
+celery -A dollshop worker -l info
+
+# 终端B
+cd backend
+venv\Scripts\activate
+celery -A dollshop beat -l info
+```
 
 ## 关键环境变量
 
-请参考：[`backend/.env.example`](backend/.env.example)
+请参考：`backend/.env.example`
 
-重点包含：
-- MySQL：`DB_*`
+重点变量：
+- 数据库：`DB_*`
 - Redis：`REDIS_URL`
 - 邮件：`EMAIL_*`
 - 支付宝：`ALIPAY_*`
+- 物流：`LOGISTICS_PROVIDER`、`KUAIDI100_API_KEY`、`KUAIDI100_CUSTOMER`
+- 补偿任务：`CELERY_BROKER_URL`、`CELERY_RESULT_BACKEND`
+- 满减规则：`ORDER_FULL_REDUCTION_RULES`
 
 ## 核心接口（摘要）
 
 - 用户：`/api/users/**`
 - 商品与分类：`/api/products/**`
-- 评价：`/api/reviews/**`
 - 购物车：`/api/cart/**`
 - 订单：`/api/orders/**`
 - 支付：`/api/pay/**`
 - 秒杀：`/api/seckill/**`
+- 评价：`/api/reviews/**`
+- 优惠券：`/api/coupons/**`
+- 退款：`/api/refunds/**`
 - 后台：`/api/admin/**`
+
+## Iter3 新增接口（关键）
+
+- `POST /api/orders/price-preview/`
+- `POST /api/orders/{order_id}/apply-coupon/`
+- `GET /api/orders/{id}/logistics/`
+- `GET /api/refunds/my/`
+- `PATCH /api/admin/refunds/{id}/review/`
+- `POST /api/pay/reconcile/`
+
+说明：为兼容旧前端，部分历史路径（如 `/api/orders/orders/...`）仍保留别名。
 
 ## 文档导航
 
-- 架构文档：[`docs/architecture/架构文档.md`](docs/architecture/架构文档.md)
-- 数据库设计：[`docs/architecture/数据库设计文档.md`](docs/architecture/数据库设计文档.md)
-- 业务与接口：[`docs/architecture/业务功能与接口文档.md`](docs/architecture/业务功能与接口文档.md)
-- 测试环境部署：[`docs/guides/测试环境部署手册.md`](docs/guides/测试环境部署手册.md)
-- 第二次迭代需求：[`docs/requirements/iter2/第二个迭代需求.md`](docs/requirements/iter2/第二个迭代需求.md)
+- `docs/requirements/iter3/第三个迭代需求.md`
+- `docs/architecture/架构文档.md`
+- `docs/architecture/业务功能与接口文档.md`
+- `docs/architecture/数据库设计文档.md`
+- `docs/guides/测试环境部署手册.md`
+- `docs/interview-skill/项目面试问答-迭代沉淀.md`
+- `docs/interview-skill/第三次迭代-交易与履约面试沉淀.md`
 
 ## 说明
-- 本项目文档统一使用 UTF-8 编码。
-- 如遇 Git 锁文件冲突（`index.lock`），请先结束后台 Git 进程后再提交。
+
+- 文档统一 UTF-8 编码。
+- 若遇 Git 锁文件冲突（`index.lock`），先关闭 Git 占用进程再执行提交。

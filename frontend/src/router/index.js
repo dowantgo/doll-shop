@@ -74,6 +74,8 @@ const routes = [
       { path: 'categories', component: () => import('../components/admin/CategoryManageView.vue') },
       { path: 'orders', component: () => import('../components/admin/OrderManageView.vue') },
       { path: 'seckill', component: () => import('../components/admin/SeckillManageView.vue') },
+      { path: 'coupons', component: () => import('../components/admin/CouponManageView.vue') },
+      { path: 'refunds', component: () => import('../components/admin/RefundManageView.vue') },
       { path: 'inventory', component: () => import('../components/admin/InventoryManageView.vue') },
       { path: 'users', component: () => import('../components/admin/UserManageView.vue') }
     ]

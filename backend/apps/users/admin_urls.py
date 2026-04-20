@@ -13,6 +13,8 @@ from apps.seckill.admin_views import (
     AdminSeckillReservationViewSet,
     AdminSeckillStatsViewSet,
 )
+from apps.coupons.views import AdminIssueCouponViewSet, CouponTemplateViewSet
+from apps.refunds.views import AdminRefundViewSet
 from apps.reviews.views import AdminReviewViewSet
 
 router = DefaultRouter()
@@ -26,6 +28,9 @@ router.register(r'seckill-stats', AdminSeckillStatsViewSet, basename='admin-seck
 router.register(r'seckill-activities', AdminSeckillActivityViewSet, basename='admin-seckill-activities')
 router.register(r'seckill-reservations', AdminSeckillReservationViewSet, basename='admin-seckill-reservations')
 router.register(r'seckill-action-logs', AdminSeckillActionLogViewSet, basename='admin-seckill-action-logs')
+router.register(r'coupon-templates', CouponTemplateViewSet, basename='admin-coupon-templates')
+router.register(r'coupon-issue', AdminIssueCouponViewSet, basename='admin-coupon-issue')
+router.register(r'refunds', AdminRefundViewSet, basename='admin-refunds')
 
 urlpatterns = [
     path('', include(router.urls)),

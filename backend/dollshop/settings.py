@@ -5,6 +5,7 @@ Django settings for dollshop project.
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 # Always prefer project-local .env over inherited process env values.
@@ -49,6 +50,8 @@ INSTALLED_APPS = [
     'apps.orders.apps.OrdersConfig',
     'apps.cart.apps.CartConfig',
     'apps.payment.apps.PaymentConfig',
+    'apps.coupons.apps.CouponsConfig',
+    'apps.refunds.apps.RefundsConfig',
     'apps.reviews.apps.ReviewsConfig',
     'apps.seckill.apps.SeckillConfig',
 ]
@@ -116,6 +119,29 @@ PRODUCT_FEED_CACHE_TTL = int(os.getenv('PRODUCT_FEED_CACHE_TTL', '300'))
 PRODUCT_TOP_SALES_CACHE_TTL = int(os.getenv('PRODUCT_TOP_SALES_CACHE_TTL', str(PRODUCT_FEED_CACHE_TTL)))
 PRODUCT_HOT_FEED_CACHE_TTL = int(os.getenv('PRODUCT_HOT_FEED_CACHE_TTL', str(PRODUCT_FEED_CACHE_TTL)))
 SECKILL_RESERVATION_EXPIRE_MINUTES = int(os.getenv('SECKILL_RESERVATION_EXPIRE_MINUTES', '10'))
+
+# Order pricing rules
+def parse_full_reduction_rules(raw: str):
+    rules = []
+    for token in (raw or '').split(','):
+        pair = token.strip()
+        if not pair:
+            continue
+        if ':' not in pair:
+            continue
+        threshold, reduction = pair.split(':', 1)
+        try:
+            rules.append((float(threshold), float(reduction)))
+        except ValueError:
+            continue
+    if not rules:
+        return [(200, 20), (500, 60)]
+    return rules
+
+
+ORDER_FULL_REDUCTION_RULES = parse_full_reduction_rules(
+    os.getenv('ORDER_FULL_REDUCTION_RULES', '200:20,500:60')
+)
 
 # Review sensitive words configuration
 REVIEW_SENSITIVE_WORDS = [
@@ -246,6 +272,22 @@ PAYMENT_CONFIG = {
         'ENABLED': os.getenv('MOCK_PAYMENT_ENABLED', 'True') == 'True',
     },
     'EXPIRE_MINUTES': int(os.getenv('PAYMENT_EXPIRE_MINUTES', '30')),
+}
+
+# Logistics provider configuration
+LOGISTICS_PROVIDER = os.getenv('LOGISTICS_PROVIDER', 'mock')
+KUAIDI100_API_KEY = os.getenv('KUAIDI100_API_KEY', '')
+KUAIDI100_CUSTOMER = os.getenv('KUAIDI100_CUSTOMER', '')
+
+# Celery configuration
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0'))
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_BEAT_SCHEDULE = {
+    'payment-reconcile-pending-every-15-min': {
+        'task': 'payment.reconcile_pending',
+        'schedule': crontab(minute='*/15'),
+    },
 }
 
 # Logging
