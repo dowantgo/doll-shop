@@ -6,8 +6,7 @@ from .models import RefundRequest
 from .services import (
     money,
     order_item_paid_total,
-    order_item_refunded_amount,
-    order_item_refunded_quantity,
+    order_item_refund_usage,
 )
 
 
@@ -57,7 +56,13 @@ def validate_refund_request(*, user, order_id: str, order_item_id: int, quantity
     # Must be called inside transaction.atomic() so select_for_update can serialize
     # concurrent refund creation requests on the same order item.
     try:
-        order = Order.objects.select_for_update().prefetch_related('items').get(order_id=order_id, user=user)
+        order = (
+            Order.objects
+            .select_for_update()
+            .select_related('discount_snapshot')
+            .prefetch_related('items')
+            .get(order_id=order_id, user=user)
+        )
     except Order.DoesNotExist:
         raise serializers.ValidationError('Order not found.')
 
@@ -74,7 +79,7 @@ def validate_refund_request(*, user, order_id: str, order_item_id: int, quantity
     except OrderItem.DoesNotExist:
         raise serializers.ValidationError('Order item not found.')
 
-    used_qty = order_item_refunded_quantity(order_item)
+    used_qty, used_amount = order_item_refund_usage(order_item)
     remaining_qty = max(order_item.quantity - used_qty, 0)
     if quantity > remaining_qty:
         raise serializers.ValidationError(f'Refund quantity exceeds remaining quantity ({remaining_qty}).')
@@ -84,7 +89,7 @@ def validate_refund_request(*, user, order_id: str, order_item_id: int, quantity
         raise serializers.ValidationError('Order item quantity invalid.')
     unit_paid = money(paid_total / order_item.quantity)
     requested_amount = money(unit_paid * quantity)
-    refundable_amount = money(paid_total - order_item_refunded_amount(order_item))
+    refundable_amount = money(paid_total - used_amount)
     if requested_amount > refundable_amount:
         requested_amount = refundable_amount
     if requested_amount <= 0:

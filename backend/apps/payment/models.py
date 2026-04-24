@@ -95,6 +95,11 @@ class PaymentTransaction(models.Model):
         verbose_name = '支付交易记录'
         verbose_name_plural = '支付交易记录'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['payment_method', 'status', 'expire_time'], name='idx_pay_reconcile_scan'),
+            models.Index(fields=['order', 'status', '-created_at'], name='idx_pay_order_status'),
+            models.Index(fields=['status', '-created_at'], name='idx_pay_status_created'),
+        ]
 
     def __str__(self):
         return f'{self.out_trade_no} - {self.amount}'

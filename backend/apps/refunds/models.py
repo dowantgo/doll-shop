@@ -70,6 +70,8 @@ class RefundRequest(models.Model):
             models.Index(fields=['order', '-created_at']),
             models.Index(fields=['status', '-created_at']),
             models.Index(fields=['idempotency_key']),
+            models.Index(fields=['order_item', 'status'], name='idx_refund_item_status'),
+            models.Index(fields=['user', 'idempotency_key'], name='idx_refund_user_idem'),
         ]
 
     def __str__(self):

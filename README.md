@@ -1,11 +1,13 @@
 # 玩偶商城（Doll Shop）
 
 一个基于 **Vue 3 + Django REST Framework** 的前后端分离电商项目。  
-当前代码主线已进入 **Iter3（交易与履约增强）**，覆盖优惠券、部分退款、支付补偿、物流轨迹等能力。
+当前代码主线已进入 **Iter4（性能优化与架构治理）**，在优惠券、部分退款、支付补偿、物流轨迹等 Iter3 能力基础上，补充 Redis feed 缓存治理、ORM 查询优化、高频索引和 Service 分层。
 
 ## 当前版本
-- 推荐开发分支：`iter3/main`
+- 推荐开发分支：`iter4-main`
 - 文档主入口：
+  - `docs/requirements/iter4/第四个迭代性能优化与架构治理.md`
+  - `docs/testing/iter4/Iter3-vs-Iter4-性能与架构优化对比报告.md`
   - `docs/requirements/iter3/第三个迭代需求.md`
   - `docs/architecture/架构文档.md`
   - `docs/architecture/业务功能与接口文档.md`
@@ -35,6 +37,7 @@
 - 优惠券管理（模板管理、发券）
 - 退款审核（同意/拒绝 + 审计日志）
 - 支付补偿（手工触发 + 定时任务自动补偿）
+- 性能治理（Redis feed 缓存、缓存命中统计、核心查询索引、Service 分层）
 
 ## 技术栈
 
@@ -166,9 +169,18 @@ celery -A dollshop beat -l info
 
 说明：为兼容旧前端，部分历史路径（如 `/api/orders/orders/...`）仍保留别名。
 
+## Iter4 性能治理摘要
+
+- 商品 feed：`top-sales`、`hot-feed` 统一由 `ProductFeedService` 管理缓存、DB 回源和命中率统计。
+- 查询优化：补充商品 feed、订单列表/过期扫描、支付补偿、退款幂等、秒杀过期释放等索引。
+- Service 分层：订单定价、优惠券释放、商品 feed 缓存等规则从视图层下沉到 service 层。
+- 对比报告：详见 `docs/testing/iter4/Iter3-vs-Iter4-性能与架构优化对比报告.md`，复测后补齐 Iter4 P50/P95/P99。
+
 ## 文档导航
 
 - `docs/requirements/iter3/第三个迭代需求.md`
+- `docs/requirements/iter4/第四个迭代性能优化与架构治理.md`
+- `docs/testing/iter4/Iter3-vs-Iter4-性能与架构优化对比报告.md`
 - `docs/architecture/架构文档.md`
 - `docs/architecture/业务功能与接口文档.md`
 - `docs/architecture/数据库设计文档.md`

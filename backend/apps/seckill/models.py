@@ -62,6 +62,8 @@ class SeckillActivity(models.Model):
         indexes = [
             models.Index(fields=['status', 'is_enabled', 'start_at']),
             models.Index(fields=['product', '-created_at']),
+            models.Index(fields=['group_id', 'status', 'is_enabled'], name='idx_seckill_group_status'),
+            models.Index(fields=['status', 'start_at', 'end_at'], name='idx_seckill_window'),
         ]
 
     def __str__(self):
@@ -144,6 +146,8 @@ class SeckillReservation(models.Model):
         indexes = [
             models.Index(fields=['activity', 'status', '-created_at']),
             models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['user', 'idempotency_key'], name='idx_seckill_user_idem'),
+            models.Index(fields=['status', 'reserved_expires_at'], name='idx_seckill_expire_scan'),
         ]
 
     def __str__(self):

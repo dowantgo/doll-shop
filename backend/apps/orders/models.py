@@ -72,6 +72,9 @@ class Order(models.Model):
             models.Index(fields=['user', '-created_at']),
             models.Index(fields=['status']),
             models.Index(fields=['payment_status']),
+            models.Index(fields=['user', 'payment_status', 'status', '-created_at'], name='idx_order_user_pay_status'),
+            models.Index(fields=['payment_status', 'status', 'expires_at'], name='idx_order_expire_scan'),
+            models.Index(fields=['tracking_no'], name='idx_order_tracking_no'),
         ]
     
     def __str__(self):
@@ -111,6 +114,9 @@ class OrderItem(models.Model):
         verbose_name = '订单项目'
         verbose_name_plural = '订单项目'
         ordering = ['id']
+        indexes = [
+            models.Index(fields=['order', 'product'], name='idx_order_item_order_product'),
+        ]
     
     def __str__(self):
         product_name = self.product.name if self.product else '已删除商品'

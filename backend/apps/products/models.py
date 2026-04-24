@@ -39,6 +39,8 @@ class Product(models.Model):
         indexes = [
             models.Index(fields=['-is_hot', '-hot_sort_order']),
             models.Index(fields=['status']),
+            models.Index(fields=['status', 'sales', 'created_at'], name='idx_product_feed_sales'),
+            models.Index(fields=['status', 'is_hot', 'hot_sort_order'], name='idx_product_feed_hot'),
         ]
     
     def __str__(self):

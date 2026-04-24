@@ -16,10 +16,6 @@ def money(value) -> Decimal:
 
 
 def order_subtotal(order: Order) -> Decimal:
-    subtotal = order.items.aggregate(total=Sum('price'))['total']
-    if subtotal is None:
-        subtotal = MONEY_ZERO
-    # aggregate on price misses quantity, compute explicitly
     real = MONEY_ZERO
     for item in order.items.all():
         real += money(item.price) * item.quantity
@@ -60,3 +56,12 @@ def order_item_refunded_amount(order_item: OrderItem) -> Decimal:
         .get('total')
     )
     return money(used or MONEY_ZERO)
+
+
+def order_item_refund_usage(order_item: OrderItem):
+    used = (
+        RefundRequest.objects.filter(order_item=order_item)
+        .exclude(status__in=[RefundRequest.STATUS_REJECTED, RefundRequest.STATUS_FAILED])
+        .aggregate(quantity_total=Sum('quantity'), amount_total=Sum('approved_amount'))
+    )
+    return int(used.get('quantity_total') or 0), money(used.get('amount_total') or MONEY_ZERO)
