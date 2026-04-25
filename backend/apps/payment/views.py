@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.orders.models import Order
+from apps.orders.services.pricing import clear_pending_payment_probe, set_pending_payment_probe
 
 from .models import PaymentTransaction
 from .serializers import CreatePaymentSerializer
@@ -105,6 +106,7 @@ def _mark_paid(txn: PaymentTransaction, trade_no: str = '') -> None:
         changed = True
     if changed:
         order.save()
+    clear_pending_payment_probe(order.user_id, txn.out_trade_no)
     logger.info(
         'payment_mark_paid payment_id=%s order_id=%s trade_no=%s payment_method=%s',
         txn.out_trade_no,
@@ -260,6 +262,7 @@ def run_reconcile():
                             'updated_at',
                         ]
                     )
+                clear_pending_payment_probe(locked_txn.order.user_id, locked_txn.out_trade_no)
             closed += 1
             logger.info(
                 'payment_reconcile_closed payment_id=%s order_id=%s',
@@ -359,6 +362,7 @@ class CreatePaymentView(APIView):
 
             txn.qr_code = qr_code
             txn.save(update_fields=['qr_code', 'updated_at'])
+            set_pending_payment_probe(order.user_id, txn.out_trade_no)
             logger.info(
                 'payment_created payment_id=%s order_id=%s payment_method=%s amount=%s',
                 txn.out_trade_no,
@@ -402,6 +406,7 @@ class PaymentStatusView(APIView):
         if txn.status == 'pending' and txn.expire_time and timezone.now() > txn.expire_time:
             txn.status = 'closed'
             txn.save(update_fields=['status', 'updated_at'])
+            clear_pending_payment_probe(txn.order.user_id, txn.out_trade_no)
 
         if txn.status == 'pending' and txn.payment_method == 'alipay':
             try:
@@ -413,6 +418,7 @@ class PaymentStatusView(APIView):
                 elif trade_status in ('TRADE_CLOSED', 'TRADE_FINISHED') and txn.status != 'paid':
                     txn.status = 'closed'
                     txn.save(update_fields=['status', 'updated_at'])
+                    clear_pending_payment_probe(txn.order.user_id, txn.out_trade_no)
             except PaymentError:
                 pass
 
@@ -489,6 +495,7 @@ class ClosePaymentView(APIView):
 
         txn.status = 'closed'
         txn.save(update_fields=['status', 'updated_at'])
+        clear_pending_payment_probe(txn.order.user_id, txn.out_trade_no)
         logger.info(
             'payment_closed payment_id=%s order_id=%s user_id=%s',
             txn.out_trade_no,
@@ -578,6 +585,7 @@ class AliPayNotifyView(View):
         elif trade_status == 'TRADE_CLOSED' and txn.status != 'paid':
             txn.status = 'closed'
             txn.save(update_fields=['status', 'updated_at'])
+            clear_pending_payment_probe(txn.order.user_id, txn.out_trade_no)
             logger.info(
                 'alipay_notify_closed payment_id=%s order_id=%s',
                 txn.out_trade_no,

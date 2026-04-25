@@ -62,9 +62,10 @@ class ProductFeedSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'price', 'main_image', 'sales', 'hot_score']
 
     def get_main_image(self, obj):
-        main = obj.images.filter(is_main=True).first()
-        if not main and obj.images.exists():
-            main = obj.images.first()
+        images = list(obj.images.all())
+        main = next((image for image in images if image.is_main), None)
+        if not main and images:
+            main = images[0]
         if not main:
             return None
         request = self.context.get('request')

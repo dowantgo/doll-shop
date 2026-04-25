@@ -5,6 +5,7 @@ from rest_framework.test import APITestCase, APITransactionTestCase
 
 from apps.products.cache_utils import make_feed_cache_key
 from apps.products.models import Product
+from apps.products.services.feed_cache import ProductFeedService, get_feed_cache_stats
 
 
 class AdminProductValidationTests(APITestCase):
@@ -93,3 +94,15 @@ class AdminProductFeedCacheInvalidationTests(APITransactionTestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         after_key = make_feed_cache_key('hot-feed', 10)
         self.assertNotEqual(before_key, after_key)
+
+    def test_product_feed_service_records_cache_hit_and_miss(self):
+        cache.clear()
+
+        first = ProductFeedService().get_top_sales(10)
+        second = ProductFeedService().get_top_sales(10)
+        stats = get_feed_cache_stats()['top-sales']
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(first, second)
+        self.assertEqual(stats['miss'], 1)
+        self.assertEqual(stats['hit'], 1)

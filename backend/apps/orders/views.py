@@ -13,18 +13,15 @@ from rest_framework.response import Response
 from apps.cart.models import CartItem
 from apps.coupons.models import OrderDiscountSnapshot, UserCoupon
 from apps.coupons.serializers import ApplyCouponSerializer, PricePreviewSerializer
-from apps.coupons.services import (
-    calc_coupon_discount,
-    calc_full_reduction,
-    to_money,
-    validate_coupon_for_amount,
-)
+from apps.coupons.services import to_money
 from apps.products.cache_utils import bump_feed_version_on_commit
 from apps.products.models import Product
 from apps.users.models import Address
 
 from .models import Order
+from .services.lifecycle import release_locked_coupon
 from .services.logistics import get_logistics_provider
+from .services.pricing import build_pricing_preview, pending_payment_probe
 from .serializers import CreateOrderSerializer, OrderSerializer, UpdateShippingSerializer
 
 logger = logging.getLogger(__name__)
@@ -64,46 +61,10 @@ class OrderViewSet(viewsets.ModelViewSet):
         serializer.save(user=self.request.user)
 
     def _build_pricing_preview(self, *, subtotal_amount: Decimal, user_coupon: UserCoupon = None):
-        subtotal_amount = to_money(subtotal_amount)
-        full_reduction_amount = to_money(calc_full_reduction(subtotal_amount))
-        amount_after_full_reduction = max(subtotal_amount - full_reduction_amount, Decimal('0.00'))
-
-        coupon_discount_amount = Decimal('0.00')
-        coupon_error = ''
-        if user_coupon:
-            valid, message = validate_coupon_for_amount(user_coupon, amount_after_full_reduction)
-            if not valid:
-                coupon_error = message
-            else:
-                coupon_discount_amount = to_money(calc_coupon_discount(user_coupon, amount_after_full_reduction))
-
-        final_payable_amount = to_money(max(amount_after_full_reduction - coupon_discount_amount, Decimal('0.00')))
-        return {
-            'subtotal_amount': str(subtotal_amount),
-            'full_reduction_amount': str(full_reduction_amount),
-            'coupon_discount_amount': str(coupon_discount_amount),
-            'final_payable_amount': str(final_payable_amount),
-            'coupon_error': coupon_error,
-        }
+        return build_pricing_preview(subtotal_amount=subtotal_amount, user_coupon=user_coupon)
 
     def _pending_payment_probe(self, user):
-        """
-        Return a lightweight payment_id probe value for observability checks.
-        Uses user's latest pending transaction out_trade_no when available.
-        """
-        try:
-            from apps.payment.models import PaymentTransaction
-
-            txn = (
-                PaymentTransaction.objects
-                .filter(order__user=user, status='pending')
-                .order_by('-created_at')
-                .only('out_trade_no')
-                .first()
-            )
-            return txn.out_trade_no if txn else ''
-        except Exception:
-            return ''
+        return pending_payment_probe(user)
 
     def list(self, request, *args, **kwargs):
         self._cleanup_expired_orders()
@@ -162,15 +123,13 @@ class OrderViewSet(viewsets.ModelViewSet):
                         .filter(order=order)
                         .first()
                     )
-                    if snapshot and snapshot.user_coupon and snapshot.user_coupon.status == UserCoupon.STATUS_LOCKED:
-                        snapshot.user_coupon.status = UserCoupon.STATUS_UNUSED
-                        snapshot.user_coupon.locked_at = None
-                        snapshot.user_coupon.save(update_fields=['status', 'locked_at', 'used_at'])
+                    coupon_id, coupon_no = release_locked_coupon(snapshot)
+                    if coupon_id:
                         logger.info(
                             'expired_order_release_coupon order_id=%s coupon_id=%s coupon_no=%s',
                             order.order_id,
-                            snapshot.user_coupon_id,
-                            snapshot.user_coupon.coupon_no,
+                            coupon_id,
+                            coupon_no,
                         )
                 if has_sales_change:
                     bump_feed_version_on_commit()
@@ -391,10 +350,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 return Response({'error': pricing['coupon_error']}, status=status.HTTP_400_BAD_REQUEST)
 
             if snapshot and snapshot.user_coupon and (not user_coupon or snapshot.user_coupon_id != user_coupon.id):
-                if snapshot.user_coupon.status == UserCoupon.STATUS_LOCKED:
-                    snapshot.user_coupon.status = UserCoupon.STATUS_UNUSED
-                    snapshot.user_coupon.locked_at = None
-                    snapshot.user_coupon.save(update_fields=['status', 'locked_at', 'used_at'])
+                release_locked_coupon(snapshot)
 
             if user_coupon:
                 user_coupon.status = UserCoupon.STATUS_LOCKED
@@ -488,12 +444,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                     .filter(order=order)
                     .first()
                 )
-                if snapshot and snapshot.user_coupon and snapshot.user_coupon.status == UserCoupon.STATUS_LOCKED:
-                    snapshot.user_coupon.status = UserCoupon.STATUS_UNUSED
-                    snapshot.user_coupon.locked_at = None
-                    snapshot.user_coupon.save(update_fields=['status', 'locked_at', 'used_at'])
-                    released_coupon_id = snapshot.user_coupon_id
-                    released_coupon_no = snapshot.user_coupon.coupon_no
+                released_coupon_id, released_coupon_no = release_locked_coupon(snapshot)
 
             bump_feed_version_on_commit()
             logger.info(

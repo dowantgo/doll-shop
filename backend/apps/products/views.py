@@ -1,14 +1,12 @@
 import logging
 
-from django.core.cache import cache
-from django.db.models import Case, ExpressionWrapper, F, FloatField, Value, When
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from .cache_utils import bump_feed_version_on_commit, get_feed_ttl, make_feed_cache_key
+from .cache_utils import bump_feed_version_on_commit
 from .models import Category, InventoryLog, Product, ProductImage
 from .serializers import (
     CategorySerializer,
@@ -18,6 +16,7 @@ from .serializers import (
     ProductImageSerializer,
     ProductSerializer,
 )
+from .services.feed_cache import ProductFeedService
 
 logger = logging.getLogger(__name__)
 
@@ -87,70 +86,14 @@ class ProductViewSet(viewsets.ModelViewSet):
     def top_sales(self, request):
         """GET /api/products/products/top-sales/"""
 
-        try:
-            limit = min(max(int(request.query_params.get('limit', 10)), 1), 50)
-        except ValueError:
-            limit = 10
-
-        cache_key = make_feed_cache_key('top-sales', limit)
-        try:
-            cached = cache.get(cache_key)
-        except Exception as exc:
-            cached = None
-            logger.warning('top-sales cache get failed, fallback to db: %s', exc)
-        if cached is not None:
-            return Response(cached)
-
-        queryset = (
-            Product.objects.filter(status=True)
-            .annotate(hot_score=ExpressionWrapper(F('sales') * Value(1.0), output_field=FloatField()))
-            .prefetch_related('images')
-            .order_by('-sales', '-created_at')[:limit]
-        )
-        serializer = ProductFeedSerializer(queryset, many=True, context={'request': request})
-        data = serializer.data
-        try:
-            cache.set(cache_key, data, get_feed_ttl('top-sales'))
-        except Exception as exc:
-            logger.warning('top-sales cache set failed, fallback to db only: %s', exc)
+        data = ProductFeedService(request=request).get_top_sales(request.query_params.get('limit', 10))
         return Response(data)
 
     @action(detail=False, methods=['get'], url_path='hot-feed')
     def hot_feed(self, request):
         """GET /api/products/products/hot-feed/"""
 
-        try:
-            limit = min(max(int(request.query_params.get('limit', 10)), 1), 50)
-        except ValueError:
-            limit = 10
-
-        cache_key = make_feed_cache_key('hot-feed', limit)
-        try:
-            cached = cache.get(cache_key)
-        except Exception as exc:
-            cached = None
-            logger.warning('hot-feed cache get failed, fallback to db: %s', exc)
-        if cached is not None:
-            return Response(cached)
-
-        hot_score_expr = ExpressionWrapper(
-            F('sales') * Value(1.0)
-            + Case(When(is_hot=True, then=Value(20.0)), default=Value(0.0), output_field=FloatField())
-            + F('hot_sort_order') * Value(0.1),
-            output_field=FloatField(),
-        )
-        queryset = (
-            Product.objects.filter(status=True)
-            .annotate(hot_score=hot_score_expr)
-            .prefetch_related('images')
-            .order_by('-hot_score', '-sales', '-created_at')[:limit]
-        )
-        serializer = ProductFeedSerializer(queryset, many=True, context={'request': request})
-        data = serializer.data
-        try:
-            cache.set(cache_key, data, get_feed_ttl('hot-feed'))
-        except Exception as exc:
-            logger.warning('hot-feed cache set failed, fallback to db only: %s', exc)
+        data = ProductFeedService(request=request).get_hot_feed(request.query_params.get('limit', 10))
         return Response(data)
 
     @action(detail=True, methods=['post'])
