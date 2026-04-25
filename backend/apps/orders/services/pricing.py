@@ -1,6 +1,8 @@
 import logging
+from datetime import timedelta
 from decimal import Decimal
 
+from django.core.cache import cache
 from apps.coupons.models import UserCoupon
 from apps.coupons.services import (
     calc_coupon_discount,
@@ -10,6 +12,8 @@ from apps.coupons.services import (
 )
 
 logger = logging.getLogger(__name__)
+_PAYMENT_PROBE_CACHE_KEY = 'orders:pricing:payment-probe:user:{user_id}'
+_PAYMENT_PROBE_CACHE_TTL = int(timedelta(minutes=15).total_seconds())
 
 
 def build_pricing_preview(*, subtotal_amount: Decimal, user_coupon: UserCoupon = None):
@@ -36,19 +40,53 @@ def build_pricing_preview(*, subtotal_amount: Decimal, user_coupon: UserCoupon =
     }
 
 
+def _payment_probe_cache_key(user_id):
+    return _PAYMENT_PROBE_CACHE_KEY.format(user_id=user_id)
+
+
+def set_pending_payment_probe(user_id, payment_id, timeout=_PAYMENT_PROBE_CACHE_TTL):
+    if not user_id:
+        return
+    cache.set(_payment_probe_cache_key(user_id), payment_id or '', timeout=timeout)
+
+
+def clear_pending_payment_probe(user_id, payment_id=None):
+    if not user_id:
+        return
+
+    cache_key = _payment_probe_cache_key(user_id)
+    if payment_id:
+        cached_payment_id = cache.get(cache_key)
+        if cached_payment_id and cached_payment_id != payment_id:
+            return
+    cache.delete(cache_key)
+
+
 def pending_payment_probe(user):
     """Lightweight observability probe used by performance/logging checks."""
+    user_id = getattr(user, 'id', None)
+    if not user_id:
+        return ''
+
+    cache_key = _payment_probe_cache_key(user_id)
+    sentinel = object()
+    cached_payment_id = cache.get(cache_key, sentinel)
+    if cached_payment_id is not sentinel:
+        return cached_payment_id or ''
+
     try:
         from apps.payment.models import PaymentTransaction
 
         txn = (
             PaymentTransaction.objects
-            .filter(order__user=user, status='pending')
+            .filter(order__user_id=user_id, status='pending')
             .order_by('-created_at')
             .only('out_trade_no')
             .first()
         )
-        return txn.out_trade_no if txn else ''
+        payment_id = txn.out_trade_no if txn else ''
+        cache.set(cache_key, payment_id, timeout=_PAYMENT_PROBE_CACHE_TTL)
+        return payment_id
     except Exception as exc:
-        logger.debug('pending_payment_probe_failed user_id=%s error=%s', getattr(user, 'id', ''), exc)
+        logger.debug('pending_payment_probe_failed user_id=%s error=%s', user_id, exc)
         return ''
