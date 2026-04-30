@@ -108,3 +108,5 @@ test-docs/
 
 # Legacy requirement drafts (migrated to docs/requirements)
 demand/
+
+docs/
