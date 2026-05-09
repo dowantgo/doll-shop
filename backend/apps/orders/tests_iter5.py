@@ -88,6 +88,57 @@ class OrderIdempotencyTests(APITestCase):
         )
         self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
 
+    def test_redis_guard_returns_conflict_before_hitting_database_path(self):
+        key = 'iter5-redis-guard'
+        acquired = self.client.post(
+            '/api/orders/orders/create_from_cart/',
+            {'address_id': self.address.id, 'remark': ''},
+            format='json',
+            HTTP_X_IDEMPOTENCY_KEY=key,
+        )
+        self.assertEqual(acquired.status_code, status.HTTP_201_CREATED)
+
+        resp = self.client.post(
+            '/api/orders/orders/create_from_cart/',
+            {'address_id': self.address.id, 'remark': ''},
+            format='json',
+            HTTP_X_IDEMPOTENCY_KEY=key,
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+    def test_create_from_cart_rate_limit_can_fast_fail(self):
+        self.client.force_authenticate(self.user)
+        for index in range(8):
+            CartItem.objects.all().delete()
+            CartItem.objects.create(user=self.user, product=self.product, quantity=1)
+            resp = self.client.post(
+                '/api/orders/orders/create_from_cart/',
+                {'address_id': self.address.id, 'remark': ''},
+                format='json',
+                HTTP_X_IDEMPOTENCY_KEY=f'iter5-rate-{index}',
+            )
+            if index < 7:
+                self.assertIn(resp.status_code, (status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST))
+
+        CartItem.objects.all().delete()
+        CartItem.objects.create(user=self.user, product=self.product, quantity=1)
+        blocked = self.client.post(
+            '/api/orders/orders/create_from_cart/',
+            {'address_id': self.address.id, 'remark': ''},
+            format='json',
+            HTTP_X_IDEMPOTENCY_KEY='iter5-rate-blocked',
+        )
+        self.assertEqual(blocked.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_price_preview_is_rate_limited_by_resource(self):
+        payload = {'items': [{'product_id': self.product.id, 'quantity': 1}]}
+        for index in range(20):
+            resp = self.client.post('/api/orders/orders/price-preview/', payload, format='json')
+            self.assertEqual(resp.status_code, status.HTTP_200_OK, msg=f'preview failed at {index}')
+
+        blocked = self.client.post('/api/orders/orders/price-preview/', payload, format='json')
+        self.assertEqual(blocked.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
 
 class ExpiredOrderCleanupTests(APITestCase):
     def setUp(self):

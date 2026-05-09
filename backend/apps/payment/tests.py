@@ -12,6 +12,7 @@ from apps.orders.models import Order
 from apps.orders.services.pricing import pending_payment_probe
 from apps.payment.models import PaymentTransaction
 from apps.users.models import Address
+from apps.payment.views import _payment_status_cache_key
 
 
 class MockPayCancelledOrderTests(APITestCase):
@@ -177,10 +178,12 @@ class PaymentStatusQueryProtectionTests(APITestCase):
         mock_query.return_value = {'trade_status': 'WAIT_BUYER_PAY'}
 
         first = self.client.get(f'/api/pay/query/?out_trade_no={self.txn.out_trade_no}')
+        cache.delete(_payment_status_cache_key(self.txn.out_trade_no))
         second = self.client.get(f'/api/pay/query/?out_trade_no={self.txn.out_trade_no}')
 
         self.assertEqual(first.status_code, status.HTTP_200_OK)
         self.assertEqual(second.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertEqual(mock_query.call_count, 1)
 
     @patch('apps.payment.views.alipay_service.query_order')
     def test_query_endpoint_reuses_cached_pending_payload(self, mock_query):

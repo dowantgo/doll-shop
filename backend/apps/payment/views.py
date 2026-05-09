@@ -575,9 +575,6 @@ class PaymentQueryView(APIView):
             clear_pending_payment_probe(txn.order.user_id, txn.out_trade_no)
             cache.delete(_payment_status_cache_key(txn.out_trade_no))
 
-        if not _allow_payment_status_query(request.user.id, txn.out_trade_no, 'query'):
-            return Response({'error': 'Payment status query is too frequent. Please try again later.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-
         if txn.status == 'pending':
             cached_payload = cache.get(_payment_status_cache_key(txn.out_trade_no))
             if cached_payload:
@@ -598,6 +595,9 @@ class PaymentQueryView(APIView):
                         'alipay': {},
                     }
                 )
+
+        if not _allow_payment_status_query(request.user.id, txn.out_trade_no, 'query'):
+            return Response({'error': 'Payment status query is too frequent. Please try again later.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         alipay_info = {}
         if txn.status == 'pending' and txn.payment_method == 'alipay':

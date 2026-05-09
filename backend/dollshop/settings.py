@@ -99,6 +99,12 @@ DATABASES = {
         'PASSWORD': os.getenv('DB_PASSWORD', 'zw14785336002'),
         'HOST': os.getenv('DB_HOST', '127.0.0.1'),
         'PORT': os.getenv('DB_PORT', '3306'),
+        'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '120')),
+        'CONN_HEALTH_CHECKS': os.getenv('DB_CONN_HEALTH_CHECKS', 'True') == 'True',
+        'OPTIONS': {
+            'charset': 'utf8mb4',
+            'connect_timeout': int(os.getenv('DB_CONNECT_TIMEOUT', '5')),
+        },
     }
 }
 

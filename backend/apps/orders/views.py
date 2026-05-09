@@ -14,9 +14,18 @@ from apps.coupons.serializers import ApplyCouponSerializer, PricePreviewSerializ
 from apps.coupons.services import to_money
 from apps.products.cache_utils import bump_feed_version_on_commit
 from apps.products.models import Product
+from apps.users.security import get_client_ip
 from apps.users.models import Address
 from dollshop.metrics import metric_increment
 
+from .guardrails import (
+    acquire_order_submit_guard,
+    check_create_order_limits,
+    check_price_preview_limits,
+    get_order_submit_result,
+    release_order_submit_guard,
+    store_order_submit_result,
+)
 from .models import Order, OrderSubmission
 from .services.lifecycle import release_locked_coupon
 from .services.logistics import get_logistics_provider
@@ -86,6 +95,39 @@ class OrderViewSet(viewsets.ModelViewSet):
         if not idempotency_key:
             return Response({'error': 'Missing X-Idempotency-Key header.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        request_ip = get_client_ip(request)
+        allowed, throttle_message = check_create_order_limits(request.user.id, request_ip)
+        if not allowed:
+            logger.warning(
+                'create_order_rate_limited user_id=%s ip=%s idempotency_key=%s',
+                request.user.id,
+                request_ip,
+                idempotency_key,
+            )
+            return Response({'error': throttle_message}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        cached_order_id = get_order_submit_result(request.user.id, idempotency_key)
+        if cached_order_id:
+            cached_order = Order.objects.filter(order_id=cached_order_id, user=request.user).first()
+            if cached_order:
+                metric_increment('order_idempotency_hit', source='redis-result')
+                serializer = OrderSerializer(cached_order, context={'request': request})
+                return Response(serializer.data, status=status.HTTP_200_OK)
+
+        guard_acquired = acquire_order_submit_guard(request.user.id, idempotency_key)
+        if not guard_acquired:
+            cached_order_id = get_order_submit_result(request.user.id, idempotency_key)
+            if cached_order_id:
+                cached_order = Order.objects.filter(order_id=cached_order_id, user=request.user).first()
+                if cached_order:
+                    metric_increment('order_idempotency_hit', source='redis-result-after-guard')
+                    serializer = OrderSerializer(cached_order, context={'request': request})
+                    return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(
+                {'error': 'Order submission is already processing.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
         submission = None
         created_submission = False
         try:
@@ -98,8 +140,10 @@ class OrderViewSet(viewsets.ModelViewSet):
                 )
                 if submission:
                     if submission.status == OrderSubmission.STATUS_SUCCEEDED and submission.order_id:
+                        store_order_submit_result(request.user.id, idempotency_key, submission.order.order_id)
+                        release_order_submit_guard(request.user.id, idempotency_key)
                         serializer = OrderSerializer(submission.order, context={'request': request})
-                        metric_increment('order_idempotency_hit')
+                        metric_increment('order_idempotency_hit', source='mysql-record')
                         logger.info(
                             'order_idempotency_hit order_id=%s user_id=%s idempotency_key=%s',
                             submission.order.order_id,
@@ -107,6 +151,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                             idempotency_key,
                         )
                         return Response(serializer.data, status=status.HTTP_200_OK)
+                    release_order_submit_guard(request.user.id, idempotency_key)
                     return Response(
                         {'error': 'Order submission is already processing.'},
                         status=status.HTTP_409_CONFLICT,
@@ -119,10 +164,12 @@ class OrderViewSet(viewsets.ModelViewSet):
                 )
                 created_submission = True
         except IntegrityError:
+            release_order_submit_guard(request.user.id, idempotency_key)
             submission = OrderSubmission.objects.filter(user=request.user, idempotency_key=idempotency_key).first()
             if submission and submission.status == OrderSubmission.STATUS_SUCCEEDED and submission.order_id:
+                store_order_submit_result(request.user.id, idempotency_key, submission.order.order_id)
                 serializer = OrderSerializer(submission.order, context={'request': request})
-                metric_increment('order_idempotency_hit')
+                metric_increment('order_idempotency_hit', source='mysql-integrity')
                 logger.info(
                     'order_idempotency_hit order_id=%s user_id=%s idempotency_key=%s race=integrity',
                     submission.order.order_id,
@@ -138,6 +185,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 submission.status = OrderSubmission.STATUS_FAILED
                 submission.last_error = 'Cart is empty.'
                 submission.save(update_fields=['status', 'last_error', 'updated_at'])
+            release_order_submit_guard(request.user.id, idempotency_key)
             return Response({'error': 'Cart is empty.'}, status=status.HTTP_400_BAD_REQUEST)
 
         for item in cart_items:
@@ -146,6 +194,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                     submission.status = OrderSubmission.STATUS_FAILED
                     submission.last_error = f'Insufficient stock for product \"{item.product.name}\".'
                     submission.save(update_fields=['status', 'last_error', 'updated_at'])
+                release_order_submit_guard(request.user.id, idempotency_key)
                 return Response(
                     {'error': f'Insufficient stock for product "{item.product.name}".'},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -214,6 +263,8 @@ class OrderViewSet(viewsets.ModelViewSet):
                 submission.order = order
                 submission.last_error = ''
                 submission.save(update_fields=['status', 'order', 'last_error', 'updated_at'])
+            store_order_submit_result(request.user.id, idempotency_key, order.order_id)
+            release_order_submit_guard(request.user.id, idempotency_key)
             serializer = OrderSerializer(order, context={'request': request})
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -222,6 +273,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 submission.status = OrderSubmission.STATUS_FAILED
                 submission.last_error = str(e)
                 submission.save(update_fields=['status', 'last_error', 'updated_at'])
+            release_order_submit_guard(request.user.id, idempotency_key)
             return Response({'error': f'Order create failed: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=False, methods=['post'], url_path='price-preview')
@@ -230,6 +282,23 @@ class OrderViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         items_data = serializer.validated_data.get('items') or []
         coupon_id = serializer.validated_data.get('coupon_id')
+        resource_token = 'cart'
+        if items_data:
+            resource_token = ','.join(str(x['product_id']) for x in sorted(items_data, key=lambda item: item['product_id']))
+
+        allowed, throttle_message = check_price_preview_limits(
+            request.user.id,
+            get_client_ip(request),
+            resource_token,
+        )
+        if not allowed:
+            logger.warning(
+                'price_preview_rate_limited user_id=%s resource_token=%s coupon_id=%s',
+                request.user.id,
+                resource_token,
+                coupon_id or '',
+            )
+            return Response({'error': throttle_message}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         if items_data:
             product_map = {
