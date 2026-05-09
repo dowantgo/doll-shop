@@ -58,6 +58,7 @@ def cleanup_expired_orders() -> dict:
                 seckill_reservation = getattr(locked_order, 'seckill_reservation', None)
                 if seckill_reservation and seckill_reservation.status in ('reserved', 'ordered'):
                     from apps.seckill.models import SeckillActivity, SeckillReservation
+                    from apps.seckill.redis_flow import restore_stock_from_db
 
                     locked_reservation = (
                         SeckillReservation.objects
@@ -69,6 +70,7 @@ def cleanup_expired_orders() -> dict:
                         activity = SeckillActivity.objects.select_for_update().get(id=locked_reservation.activity_id)
                         activity.reserved_stock = max(activity.reserved_stock - locked_reservation.quantity, 0)
                         activity.save(update_fields=['reserved_stock', 'updated_at'])
+                        restore_stock_from_db(activity.id, locked_reservation.quantity, reason='order_expired')
 
                         locked_reservation.status = 'expired'
                         locked_reservation.order = None

@@ -1,4 +1,4 @@
-import request from '../utils/request'
+﻿import request from '../utils/request'
 
 const SECKILL_ACTIVITY_STATUS_TEXT = {
   draft: '草稿',
@@ -56,7 +56,7 @@ const LOCALIZED_ERROR_RULES = [
     message: '已超过每人限购数量，请减少购买件数后再试'
   },
   {
-    match: /stock|库存|sold out|out of stock/i,
+    match: /stock|库存|sold out|out of stock|不足/i,
     message: '秒杀库存不足，请选择其他商品或稍后再试'
   },
   {
@@ -74,6 +74,18 @@ const LOCALIZED_ERROR_RULES = [
   {
     match: /address|收货地址/i,
     message: '收货地址信息不完整，请先选择可用地址'
+  },
+  {
+    match: /submit token|令牌|token/i,
+    message: '秒杀令牌已失效，请重新发起秒杀'
+  },
+  {
+    match: /processing|处理中/i,
+    message: '当前秒杀订单正在处理中，请稍后刷新结果'
+  },
+  {
+    match: /rate|frequent|429|too many/i,
+    message: '当前秒杀请求过于频繁，请稍后再试'
   }
 ]
 
@@ -84,6 +96,10 @@ export const seckillApi = {
 
   getProductActiveActivity(productId) {
     return request.get(`/seckill/product/${productId}/active/`)
+  },
+
+  issueSubmitToken(activityId) {
+    return request.post('/seckill/issue-submit-token/', { activity_id: activityId })
   },
 
   preReserve(data, idempotencyKey) {

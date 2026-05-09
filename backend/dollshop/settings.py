@@ -304,6 +304,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'orders.cleanup_expired_orders',
         'schedule': crontab(minute='*/1'),
     },
+    'seckill-cleanup-expired-every-minute': {
+        'task': 'seckill.cleanup_expired_reservations',
+        'schedule': crontab(minute='*/1'),
+    },
 }
 
 # Logging

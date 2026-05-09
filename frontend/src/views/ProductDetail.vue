@@ -445,21 +445,33 @@ const submitSeckillOrder = async () => {
   seckillSubmitting.value = true
   const idempotencyKey = `sk-${activeSeckill.value.id}-${Date.now()}`
   try {
+    const tokenRes = await seckillApi.issueSubmitToken(activeSeckill.value.id)
+    const submitToken = tokenRes?.submit_token
+    if (!submitToken) {
+      throw new Error('Submit token missing')
+    }
     const reserveRes = await seckillApi.preReserve(
       {
         activity_id: activeSeckill.value.id,
-        quantity: 1
+        quantity: 1,
+        submit_token: submitToken
       },
       idempotencyKey
     )
+    const reservationToken = reserveRes?.data?.reservation_token
     const reservationId = reserveRes?.data?.id
-    if (!reservationId) {
-      throw new Error('Reservation id missing')
+    if (!reservationToken && !reservationId) {
+      throw new Error('Reservation token missing')
     }
-    await seckillApi.createOrder({
-      reservation_id: reservationId,
+    const payload = {
       address_id: seckillAddressId.value
-    })
+    }
+    if (reservationToken) {
+      payload.reservation_token = reservationToken
+    } else {
+      payload.reservation_id = reservationId
+    }
+    await seckillApi.createOrder(payload)
 
     ElMessage.success('秒杀订单已创建，请前往订单页支付')
     seckillDialogVisible.value = false

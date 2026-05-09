@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .models import SeckillActivity, SeckillAdminActionLog, SeckillReservation
+from .redis_flow import drop_activity_stock_bucket, sync_activity_stock_bucket
 from .serializers import (
     AdminSeckillActionLogSerializer,
     AdminSeckillActivitySerializer,
@@ -18,7 +19,7 @@ from .serializers import (
     ChangeSeckillStatusSerializer,
     ReleaseReservationSerializer,
 )
-from .views import _get_release_target_status, _release_reservation_quota, _reservation_is_paid, cleanup_expired_reservations
+from .views import _get_release_target_status, _release_reservation_quota, _reservation_is_paid
 
 
 class IsAdminUser(IsAuthenticated):
@@ -74,8 +75,6 @@ class AdminSeckillStatsViewSet(viewsets.ViewSet):
     permission_classes = [IsAdminUser]
 
     def list(self, request):
-        cleanup_expired_reservations()
-
         total_activities = SeckillActivity.objects.count()
         online_activities = SeckillActivity.objects.filter(status=SeckillActivity.STATUS_ONLINE, is_enabled=True).count()
 
@@ -113,7 +112,6 @@ class AdminSeckillActivityViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminUser]
 
     def get_queryset(self):
-        cleanup_expired_reservations()
         queryset = super().get_queryset()
 
         status_value = (self.request.query_params.get('status') or '').strip()
@@ -178,12 +176,14 @@ class AdminSeckillActivityViewSet(viewsets.ModelViewSet):
                     after_data=_snapshot_activity(activity),
                     remark='Create seckill activity (batch)',
                 )
+                sync_activity_stock_bucket(activity_id=activity.id, remaining_stock=activity.remaining_stock)
                 created.append(self.get_serializer(activity).data)
 
         return Response({'group_id': group_id, 'count': len(created), 'results': created}, status=status.HTTP_201_CREATED)
 
     def perform_create(self, serializer):
         activity = serializer.save()
+        sync_activity_stock_bucket(activity_id=activity.id, remaining_stock=activity.remaining_stock)
         _log_action(
             operator=self.request.user,
             action_type=SeckillAdminActionLog.ACTION_CREATE_ACTIVITY,
@@ -195,6 +195,7 @@ class AdminSeckillActivityViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         before = _snapshot_activity(self.get_object())
         activity = serializer.save()
+        sync_activity_stock_bucket(activity_id=activity.id, remaining_stock=activity.remaining_stock)
         _log_action(
             operator=self.request.user,
             action_type=SeckillAdminActionLog.ACTION_UPDATE_ACTIVITY,
@@ -213,6 +214,7 @@ class AdminSeckillActivityViewSet(viewsets.ModelViewSet):
             )
 
         before = _snapshot_activity(activity)
+        drop_activity_stock_bucket(activity.id)
         response = super().destroy(request, *args, **kwargs)
         _log_action(
             operator=request.user,
@@ -250,6 +252,7 @@ class AdminSeckillActivityViewSet(viewsets.ModelViewSet):
 
         activity.total_stock = target_stock
         activity.save(update_fields=['total_stock', 'updated_at'])
+        sync_activity_stock_bucket(activity_id=activity.id, remaining_stock=activity.remaining_stock)
 
         _log_action(
             operator=request.user,
@@ -307,6 +310,7 @@ class AdminSeckillActivityViewSet(viewsets.ModelViewSet):
         activity.status = target_status
         activity.is_enabled = target_status != SeckillActivity.STATUS_OFFLINE
         activity.save(update_fields=['status', 'is_enabled', 'updated_at'])
+        sync_activity_stock_bucket(activity_id=activity.id, remaining_stock=activity.remaining_stock)
 
         _log_action(
             operator=request.user,
@@ -326,7 +330,6 @@ class AdminSeckillReservationViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAdminUser]
 
     def get_queryset(self):
-        cleanup_expired_reservations()
         queryset = super().get_queryset()
 
         status_value = (self.request.query_params.get('status') or '').strip()

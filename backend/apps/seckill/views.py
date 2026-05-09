@@ -1,9 +1,8 @@
 ﻿from datetime import timedelta
 from decimal import Decimal
-import time
+import logging
 
 from django.conf import settings
-from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Q, Sum
 from django.shortcuts import get_object_or_404
@@ -17,40 +16,38 @@ from apps.orders.models import Order
 from apps.orders.serializers import OrderSerializer
 from apps.products.cache_utils import bump_feed_version_on_commit
 from apps.products.models import Product
+from apps.users.security import get_client_ip
 from apps.users.models import Address
+from dollshop.metrics import metric_increment
 
+from .guardrails import check_pre_reserve_limits
 from .models import SeckillActivity, SeckillReservation
+from .redis_flow import (
+    SECKILL_SUBMIT_TOKEN_TTL_SECONDS,
+    acquire_create_order_lock,
+    clear_reservation_ticket,
+    consume_submit_token,
+    ensure_activity_stock_bucket,
+    get_activity_remaining_stock,
+    get_cached_reservation_token,
+    hold_stock_and_create_ticket,
+    issue_submit_token,
+    load_reservation_ticket,
+    pop_expired_reservation_tokens,
+    release_create_order_lock,
+    restore_stock_from_db,
+    restore_stock_from_ticket,
+    sync_activity_stock_bucket,
+)
 from .serializers import (
     SeckillActivitySerializer,
     SeckillCreateOrderSerializer,
+    SeckillIssueSubmitTokenSerializer,
     SeckillPreReserveSerializer,
     SeckillReservationSerializer,
 )
 
-
-def check_rate_limit(request, scope='seckill_pre_reserve', limit=60, window_seconds=60):
-    """
-    Lightweight rate-limit utility based on cache.
-    """
-    user_tag = f"user:{request.user.id}" if request.user.is_authenticated else f"ip:{request.META.get('REMOTE_ADDR', 'unknown')}"
-    window_slot = int(time.time() // window_seconds)
-    cache_key = f"ratelimit:{scope}:{user_tag}:{window_slot}"
-    current = cache.get(cache_key, 0)
-
-    if current >= limit:
-        return Response(
-            {'error': 'Too many requests, please retry later.'},
-            status=status.HTTP_429_TOO_MANY_REQUESTS,
-        )
-
-    if current == 0:
-        cache.set(cache_key, 1, timeout=window_seconds)
-    else:
-        try:
-            cache.incr(cache_key)
-        except ValueError:
-            cache.set(cache_key, current + 1, timeout=window_seconds)
-    return None
+logger = logging.getLogger(__name__)
 
 
 def _reserve_expire_minutes():
@@ -59,6 +56,29 @@ def _reserve_expire_minutes():
         return max(int(raw), 1)
     except (TypeError, ValueError):
         return 10
+
+
+def _reserve_expire_seconds():
+    return _reserve_expire_minutes() * 60
+
+
+def _serialize_ticket_payload(ticket: dict, *, activity=None, product=None):
+    expires_at = ticket.get('expires_at')
+    return {
+        'id': None,
+        'activity_id': int(ticket.get('activity_id', 0) or 0),
+        'product_id': int(ticket.get('product_id', 0) or 0),
+        'product_name': product.name if product else '',
+        'user_id': int(ticket.get('user_id', 0) or 0),
+        'activity_name': activity.name if activity else '',
+        'quantity': int(ticket.get('quantity', 1) or 1),
+        'status': ticket.get('status') or SeckillReservation.STATUS_RESERVED,
+        'idempotency_key': ticket.get('idempotency_key') or '',
+        'reservation_token': ticket.get('reservation_token') or '',
+        'order_id': '',
+        'reserved_expires_at': expires_at,
+        'created_at': ticket.get('created_at') or timezone.now().isoformat(),
+    }
 
 
 def _release_reservation_quota(reservation, new_status, restore_product_stock):
@@ -78,6 +98,7 @@ def _release_reservation_quota(reservation, new_status, restore_product_stock):
         product = Product.objects.select_for_update().get(id=reservation.product_id)
         product.stock += release_qty
         product.save(update_fields=['stock', 'updated_at'])
+        restore_stock_from_db(activity.id, release_qty, reason=new_status)
 
     reservation.status = new_status
     reservation.reserved_expires_at = None
@@ -114,6 +135,11 @@ def _reservation_is_paid(reservation):
 
 def cleanup_expired_reservations():
     now = timezone.now()
+    released_ticket_count = 0
+    for reservation_token in pop_expired_reservation_tokens():
+        if restore_stock_from_ticket(reservation_token, reason='expired'):
+            released_ticket_count += 1
+
     expired_ids = list(
         SeckillReservation.objects.filter(
             status=SeckillReservation.STATUS_RESERVED,
@@ -122,6 +148,7 @@ def cleanup_expired_reservations():
         ).values_list('id', flat=True)
     )
 
+    released_db_count = 0
     for reservation_id in expired_ids:
         with transaction.atomic():
             reservation = (
@@ -141,6 +168,15 @@ def cleanup_expired_reservations():
                 new_status=SeckillReservation.STATUS_EXPIRED,
                 restore_product_stock=True,
             )
+            released_db_count += 1
+
+    summary = {
+        'released_ticket_count': released_ticket_count,
+        'released_db_count': released_db_count,
+    }
+    if released_ticket_count or released_db_count:
+        logger.info('cleanup_expired_seckill_reservations_summary %s', summary)
+    return summary
 
 
 def build_activity_groups(queryset, request):
@@ -165,6 +201,43 @@ def build_activity_groups(queryset, request):
     return list(groups.values())
 
 
+class SeckillIssueSubmitTokenView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        payload = SeckillIssueSubmitTokenSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        activity_id = payload.validated_data['activity_id']
+        now = timezone.now()
+        activity = (
+            SeckillActivity.objects
+            .select_related('product')
+            .filter(
+                id=activity_id,
+                status=SeckillActivity.STATUS_ONLINE,
+                is_enabled=True,
+                start_at__lte=now,
+                end_at__gte=now,
+                product__status=True,
+            )
+            .first()
+        )
+        if not activity:
+            return Response({'error': 'Activity not found or unavailable.'}, status=status.HTTP_404_NOT_FOUND)
+
+        ensure_activity_stock_bucket(activity_id=activity.id, fallback_remaining=activity.remaining_stock)
+        submit_token = issue_submit_token(user_id=request.user.id, activity_id=activity.id)
+        metric_increment('seckill_submit_token_issued')
+        return Response(
+            {
+                'activity_id': activity.id,
+                'submit_token': submit_token,
+                'expires_in_seconds': SECKILL_SUBMIT_TOKEN_TTL_SECONDS,
+            }
+        )
+
+
 class SeckillActivityListView(APIView):
     """
     GET /api/seckill/activities/
@@ -173,7 +246,6 @@ class SeckillActivityListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        cleanup_expired_reservations()
         now = timezone.now()
         queryset = (
             SeckillActivity.objects
@@ -185,6 +257,8 @@ class SeckillActivityListView(APIView):
             )
             .order_by('start_at', '-created_at')
         )
+        for activity in queryset:
+            ensure_activity_stock_bucket(activity_id=activity.id, fallback_remaining=activity.remaining_stock)
         return Response(build_activity_groups(queryset, request))
 
 
@@ -196,7 +270,6 @@ class SeckillProductActivityView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, product_id):
-        cleanup_expired_reservations()
         now = timezone.now()
         activity = (
             SeckillActivity.objects
@@ -215,6 +288,7 @@ class SeckillProductActivityView(APIView):
         if not activity:
             return Response({'error': 'No active seckill for this product.'}, status=status.HTTP_404_NOT_FOUND)
 
+        ensure_activity_stock_bucket(activity_id=activity.id, fallback_remaining=activity.remaining_stock)
         serializer = SeckillActivitySerializer(activity, context={'request': request})
         return Response(serializer.data)
 
@@ -228,20 +302,31 @@ class SeckillPreReserveView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        cleanup_expired_reservations()
-
-        limited = check_rate_limit(request)
-        if limited is not None:
-            return limited
-
         payload = SeckillPreReserveSerializer(data=request.data)
         payload.is_valid(raise_exception=True)
 
         activity_id = payload.validated_data['activity_id']
         quantity = payload.validated_data['quantity']
+        submit_token = payload.validated_data['submit_token']
         idempotency_key = (request.headers.get('X-Idempotency-Key') or '').strip()
 
         if idempotency_key:
+            cached_token = get_cached_reservation_token(user_id=request.user.id, idempotency_key=idempotency_key)
+            if cached_token:
+                cached_ticket = load_reservation_ticket(cached_token)
+                if cached_ticket:
+                    activity = SeckillActivity.objects.select_related('product').filter(id=activity_id).first()
+                    product = activity.product if activity else None
+                    return Response(
+                        {
+                            'message': 'Idempotent replay, returning existing reservation.',
+                            'order_created': False,
+                            'payment_triggered': False,
+                            'data': _serialize_ticket_payload(cached_ticket, activity=activity, product=product),
+                        },
+                        status=status.HTTP_200_OK,
+                    )
+
             existing = (
                 SeckillReservation.objects
                 .select_related('activity', 'product', 'user', 'order')
@@ -260,9 +345,20 @@ class SeckillPreReserveView(APIView):
                     status=status.HTTP_200_OK,
                 )
 
-        now = timezone.now()
-        expires_at = now + timedelta(minutes=_reserve_expire_minutes())
+        allowed, throttle_message = check_pre_reserve_limits(
+            user_id=request.user.id,
+            ip=get_client_ip(request),
+            activity_id=activity_id,
+        )
+        if not allowed:
+            logger.warning(
+                'seckill_pre_reserve_rate_limited user_id=%s activity_id=%s',
+                request.user.id,
+                activity_id,
+            )
+            return Response({'error': throttle_message}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
+        now = timezone.now()
         with transaction.atomic():
             activity = (
                 SeckillActivity.objects
@@ -281,6 +377,9 @@ class SeckillPreReserveView(APIView):
 
             if not (activity.start_at <= now <= activity.end_at):
                 return Response({'error': 'Activity is not in active time window.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not consume_submit_token(user_id=request.user.id, activity_id=activity.id, submit_token=submit_token):
+                return Response({'error': '秒杀令牌已失效，请重新发起秒杀。'}, status=status.HTTP_400_BAD_REQUEST)
 
             user_reserved = (
                 SeckillReservation.objects
@@ -302,39 +401,26 @@ class SeckillPreReserveView(APIView):
                     {'error': f'超出限购数量：该商品每人限购 {activity.per_user_limit} 件。'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-
-            if quantity > activity.remaining_stock:
-                return Response({'error': 'Insufficient reservation stock.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            product = Product.objects.select_for_update().get(id=activity.product_id)
-            if product.stock < quantity:
-                return Response({'error': 'Product stock is insufficient for reservation.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            reservation = SeckillReservation.objects.create(
-                activity=activity,
-                product=activity.product,
-                user=request.user,
+            ensure_activity_stock_bucket(activity_id=activity.id, fallback_remaining=activity.remaining_stock)
+            held, ticket, remaining_stock = hold_stock_and_create_ticket(
+                user_id=request.user.id,
+                activity_id=activity.id,
+                product_id=activity.product_id,
                 quantity=quantity,
-                status=SeckillReservation.STATUS_RESERVED,
-                idempotency_key=idempotency_key or None,
-                reserved_expires_at=expires_at,
+                idempotency_key=idempotency_key,
             )
-            activity.reserved_stock += quantity
-            activity.save(update_fields=['reserved_stock', 'updated_at'])
-
-            product.stock -= quantity
-            product.save(update_fields=['stock', 'updated_at'])
-
-        if idempotency_key:
-            cache_key = f"seckill:idempotency:{request.user.id}:{idempotency_key}"
-            cache.set(cache_key, reservation.id, timeout=3600)
+            if not held:
+                if remaining_stock < 0:
+                    sync_activity_stock_bucket(activity_id=activity.id, remaining_stock=activity.remaining_stock)
+                    return Response({'error': '秒杀库存同步中，请稍后再试。'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+                return Response({'error': 'Insufficient reservation stock.'}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(
             {
                 'message': 'Pre-reserve succeeded. Create order before reservation expires.',
                 'order_created': False,
                 'payment_triggered': False,
-                'data': SeckillReservationSerializer(reservation).data,
+                'data': _serialize_ticket_payload(ticket, activity=activity, product=activity.product),
             },
             status=status.HTTP_201_CREATED,
         )
@@ -349,12 +435,11 @@ class SeckillCreateOrderView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        cleanup_expired_reservations()
-
         payload = SeckillCreateOrderSerializer(data=request.data)
         payload.is_valid(raise_exception=True)
 
-        reservation_id = payload.validated_data['reservation_id']
+        reservation_id = payload.validated_data.get('reservation_id')
+        reservation_token = (payload.validated_data.get('reservation_token') or '').strip()
         address_id = payload.validated_data['address_id']
         remark = payload.validated_data.get('remark', '').strip()
 
@@ -363,71 +448,141 @@ class SeckillCreateOrderView(APIView):
         except Address.DoesNotExist:
             return Response({'error': 'Address not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        if reservation_token:
+            guard_acquired = acquire_create_order_lock(reservation_token)
+            if not guard_acquired:
+                return Response({'error': '秒杀订单正在处理中，请稍后刷新结果。'}, status=status.HTTP_409_CONFLICT)
+        else:
+            guard_acquired = False
+
         now = timezone.now()
 
-        with transaction.atomic():
-            reservation = (
-                SeckillReservation.objects
-                .select_for_update()
-                .select_related('activity', 'product', 'order')
-                .filter(id=reservation_id, user=request.user)
-                .first()
-            )
-            if not reservation:
-                return Response({'error': 'Reservation not found.'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            with transaction.atomic():
+                reservation = None
+                ticket = None
 
-            if reservation.status in [SeckillReservation.STATUS_ORDERED, SeckillReservation.STATUS_PAID] and reservation.order:
-                serializer = OrderSerializer(reservation.order, context={'request': request})
-                return Response(
-                    {
-                        'message': 'Order already created from this reservation.',
-                        'data': serializer.data,
-                        'reservation': SeckillReservationSerializer(reservation).data,
-                    },
-                    status=status.HTTP_200_OK,
+                if reservation_token:
+                    reservation = (
+                        SeckillReservation.objects
+                        .select_for_update()
+                        .select_related('activity', 'product', 'order')
+                        .filter(reservation_token=reservation_token, user=request.user)
+                        .first()
+                    )
+                    if not reservation:
+                        ticket = load_reservation_ticket(reservation_token)
+                        if not ticket:
+                            return Response({'error': 'Reservation expired. Please reserve again.'}, status=status.HTTP_400_BAD_REQUEST)
+                        if int(ticket.get('user_id') or 0) != request.user.id:
+                            return Response({'error': 'Reservation not found.'}, status=status.HTTP_404_NOT_FOUND)
+                else:
+                    reservation = (
+                        SeckillReservation.objects
+                        .select_for_update()
+                        .select_related('activity', 'product', 'order')
+                        .filter(id=reservation_id, user=request.user)
+                        .first()
+                    )
+                    if not reservation:
+                        return Response({'error': 'Reservation not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+                if reservation and reservation.status in [SeckillReservation.STATUS_ORDERED, SeckillReservation.STATUS_PAID] and reservation.order:
+                    serializer = OrderSerializer(reservation.order, context={'request': request})
+                    return Response(
+                        {
+                            'message': 'Order already created from this reservation.',
+                            'data': serializer.data,
+                            'reservation': SeckillReservationSerializer(reservation).data,
+                        },
+                        status=status.HTTP_200_OK,
+                    )
+
+                if reservation:
+                    if reservation.status != SeckillReservation.STATUS_RESERVED:
+                        return Response({'error': 'Reservation is not available for order creation.'}, status=status.HTTP_400_BAD_REQUEST)
+                    if reservation.reserved_expires_at and reservation.reserved_expires_at <= now:
+                        _release_reservation_quota(
+                            reservation,
+                            new_status=SeckillReservation.STATUS_EXPIRED,
+                            restore_product_stock=True,
+                        )
+                        return Response({'error': 'Reservation expired. Please reserve again.'}, status=status.HTTP_400_BAD_REQUEST)
+                    activity = SeckillActivity.objects.select_for_update().get(id=reservation.activity_id)
+                    product = Product.objects.select_for_update().get(id=reservation.product_id)
+                    quantity = reservation.quantity
+                else:
+                    activity = (
+                        SeckillActivity.objects
+                        .select_for_update()
+                        .select_related('product')
+                        .filter(id=int(ticket['activity_id']))
+                        .first()
+                    )
+                    if not activity:
+                        restore_stock_from_ticket(reservation_token, reason='activity_missing')
+                        return Response({'error': 'Activity not found or unavailable.'}, status=status.HTTP_404_NOT_FOUND)
+                    product = Product.objects.select_for_update().get(id=activity.product_id)
+                    quantity = int(ticket['quantity'])
+                    if product.stock < quantity:
+                        restore_stock_from_ticket(reservation_token, reason='db_stock_insufficient')
+                        return Response({'error': 'Product stock is insufficient for reservation.'}, status=status.HTTP_400_BAD_REQUEST)
+
+                if activity.status != SeckillActivity.STATUS_ONLINE or not activity.is_enabled or not (activity.start_at <= now <= activity.end_at):
+                    if reservation:
+                        _release_reservation_quota(
+                            reservation,
+                            new_status=SeckillReservation.STATUS_CANCELLED,
+                            restore_product_stock=True,
+                        )
+                    else:
+                        restore_stock_from_ticket(reservation_token, reason='activity_offline')
+                    return Response({'error': 'Activity is offline. Reservation has been released.'}, status=status.HTTP_400_BAD_REQUEST)
+
+                if not reservation:
+                    reservation = SeckillReservation.objects.create(
+                        activity=activity,
+                        product=activity.product,
+                        user=request.user,
+                        quantity=quantity,
+                        status=SeckillReservation.STATUS_RESERVED,
+                        idempotency_key=(ticket.get('idempotency_key') or None),
+                        reservation_token=reservation_token,
+                        reserved_expires_at=now + timedelta(minutes=_reserve_expire_minutes()),
+                    )
+                    activity.reserved_stock += quantity
+                    activity.save(update_fields=['reserved_stock', 'updated_at'])
+                    product.stock -= quantity
+                    product.save(update_fields=['stock', 'updated_at'])
+
+                total_price = Decimal(activity.seckill_price) * reservation.quantity
+                order = Order.objects.create(
+                    user=request.user,
+                    total_price=total_price,
+                    address=address,
+                    remark=remark or f'[SECKILL]{activity.name}',
+                )
+                order.items.create(
+                    product=reservation.product,
+                    quantity=reservation.quantity,
+                    price=activity.seckill_price,
                 )
 
-            if reservation.status != SeckillReservation.STATUS_RESERVED:
-                return Response({'error': 'Reservation is not available for order creation.'}, status=status.HTTP_400_BAD_REQUEST)
+                product.sales += reservation.quantity
+                product.save(update_fields=['sales', 'updated_at'])
 
-            if reservation.reserved_expires_at and reservation.reserved_expires_at <= now:
-                _release_reservation_quota(
-                    reservation,
-                    new_status=SeckillReservation.STATUS_EXPIRED,
-                    restore_product_stock=True,
-                )
-                return Response({'error': 'Reservation expired. Please reserve again.'}, status=status.HTTP_400_BAD_REQUEST)
+                reservation.status = SeckillReservation.STATUS_ORDERED
+                reservation.order = order
+                reservation.reserved_expires_at = order.expires_at
+                if reservation_token and not reservation.reservation_token:
+                    reservation.reservation_token = reservation_token
+                reservation.save(update_fields=['status', 'order', 'reserved_expires_at', 'reservation_token', 'updated_at'])
 
-            activity = SeckillActivity.objects.select_for_update().get(id=reservation.activity_id)
-            if activity.status != SeckillActivity.STATUS_ONLINE or not activity.is_enabled:
-                _release_reservation_quota(
-                    reservation,
-                    new_status=SeckillReservation.STATUS_CANCELLED,
-                    restore_product_stock=True,
-                )
-                return Response({'error': 'Activity is offline. Reservation has been released.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            total_price = Decimal(activity.seckill_price) * reservation.quantity
-            order = Order.objects.create(
-                user=request.user,
-                total_price=total_price,
-                address=address,
-                remark=remark or f'[SECKILL]{activity.name}',
-            )
-            order.items.create(
-                product=reservation.product,
-                quantity=reservation.quantity,
-                price=activity.seckill_price,
-            )
-
-            product = Product.objects.select_for_update().get(id=reservation.product_id)
-            product.sales += reservation.quantity
-            product.save(update_fields=['sales', 'updated_at'])
-
-            reservation.status = SeckillReservation.STATUS_ORDERED
-            reservation.order = order
-            reservation.reserved_expires_at = order.expires_at
-            reservation.save(update_fields=['status', 'order', 'reserved_expires_at', 'updated_at'])
+            if reservation_token:
+                clear_reservation_ticket(reservation_token)
+        finally:
+            if guard_acquired:
+                release_create_order_lock(reservation_token)
 
         bump_feed_version_on_commit()
         serializer = OrderSerializer(order, context={'request': request})
@@ -449,7 +604,6 @@ class MySeckillReservationsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        cleanup_expired_reservations()
         queryset = (
             SeckillReservation.objects
             .select_related('activity', 'product', 'order')
@@ -468,8 +622,6 @@ class CancelSeckillReservationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, id):
-        cleanup_expired_reservations()
-
         with transaction.atomic():
             reservation = get_object_or_404(
                 SeckillReservation.objects.select_for_update(),
@@ -497,7 +649,6 @@ class ExpireOrReleaseReservationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, id):
-        cleanup_expired_reservations()
         now = timezone.now()
         is_admin = getattr(request.user, 'role', '') == 'admin'
 

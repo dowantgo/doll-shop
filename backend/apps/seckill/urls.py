@@ -6,6 +6,7 @@ from .views import (
     MySeckillReservationsView,
     SeckillActivityListView,
     SeckillCreateOrderView,
+    SeckillIssueSubmitTokenView,
     SeckillPreReserveView,
     SeckillProductActivityView,
 )
@@ -13,6 +14,7 @@ from .views import (
 urlpatterns = [
     path('activities/', SeckillActivityListView.as_view(), name='seckill-activities'),
     path('product/<int:product_id>/active/', SeckillProductActivityView.as_view(), name='seckill-product-active'),
+    path('issue-submit-token/', SeckillIssueSubmitTokenView.as_view(), name='seckill-issue-submit-token'),
     path('pre-reserve/', SeckillPreReserveView.as_view(), name='seckill-pre-reserve'),
     path('create-order/', SeckillCreateOrderView.as_view(), name='seckill-create-order'),
     path('my-reservations/', MySeckillReservationsView.as_view(), name='seckill-my-reservations'),

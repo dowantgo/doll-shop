@@ -1,13 +1,14 @@
 from rest_framework import serializers
 
 from .models import SeckillActivity, SeckillAdminActionLog, SeckillReservation
+from .redis_flow import get_activity_remaining_stock
 
 
 class SeckillActivitySerializer(serializers.ModelSerializer):
     group_id = serializers.CharField(read_only=True)
     product_id = serializers.IntegerField(source='product.id', read_only=True)
     product_name = serializers.CharField(source='product.name', read_only=True)
-    remaining_stock = serializers.IntegerField(read_only=True)
+    remaining_stock = serializers.SerializerMethodField()
     main_image = serializers.SerializerMethodField()
 
     class Meta:
@@ -41,10 +42,18 @@ class SeckillActivitySerializer(serializers.ModelSerializer):
             return request.build_absolute_uri(main.image.url)
         return main.image.url
 
+    def get_remaining_stock(self, obj):
+        return get_activity_remaining_stock(obj.id, obj.remaining_stock)
+
 
 class SeckillPreReserveSerializer(serializers.Serializer):
     activity_id = serializers.IntegerField(min_value=1)
     quantity = serializers.IntegerField(min_value=1, default=1)
+    submit_token = serializers.CharField(required=True, allow_blank=False, max_length=128)
+
+
+class SeckillIssueSubmitTokenSerializer(serializers.Serializer):
+    activity_id = serializers.IntegerField(min_value=1)
 
 
 class SeckillReservationSerializer(serializers.ModelSerializer):
@@ -67,6 +76,7 @@ class SeckillReservationSerializer(serializers.ModelSerializer):
             'quantity',
             'status',
             'idempotency_key',
+            'reservation_token',
             'order_id',
             'reserved_expires_at',
             'created_at',
@@ -74,16 +84,25 @@ class SeckillReservationSerializer(serializers.ModelSerializer):
 
 
 class SeckillCreateOrderSerializer(serializers.Serializer):
-    reservation_id = serializers.IntegerField(min_value=1)
+    reservation_id = serializers.IntegerField(min_value=1, required=False)
+    reservation_token = serializers.CharField(required=False, allow_blank=False, max_length=128)
     address_id = serializers.IntegerField(min_value=1)
     remark = serializers.CharField(required=False, allow_blank=True, max_length=500)
+
+    def validate(self, attrs):
+        reservation_id = attrs.get('reservation_id')
+        reservation_token = (attrs.get('reservation_token') or '').strip()
+        if not reservation_id and not reservation_token:
+            raise serializers.ValidationError('reservation_id or reservation_token is required.')
+        attrs['reservation_token'] = reservation_token
+        return attrs
 
 
 class AdminSeckillActivitySerializer(serializers.ModelSerializer):
     group_id = serializers.CharField(required=False, allow_blank=True)
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_current_stock = serializers.IntegerField(source='product.stock', read_only=True)
-    remaining_stock = serializers.IntegerField(read_only=True)
+    remaining_stock = serializers.SerializerMethodField()
 
     class Meta:
         model = SeckillActivity
@@ -107,6 +126,9 @@ class AdminSeckillActivitySerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         read_only_fields = ['reserved_stock', 'remaining_stock', 'created_at', 'updated_at']
+
+    def get_remaining_stock(self, obj):
+        return get_activity_remaining_stock(obj.id, obj.remaining_stock)
 
     def validate(self, attrs):
         start_at = attrs.get('start_at')
@@ -172,6 +194,7 @@ class AdminSeckillReservationSerializer(serializers.ModelSerializer):
             'quantity',
             'status',
             'idempotency_key',
+            'reservation_token',
             'order',
             'order_id',
             'order_payment_status',

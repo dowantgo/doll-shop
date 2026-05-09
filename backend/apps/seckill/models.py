@@ -122,6 +122,13 @@ class SeckillReservation(models.Model):
         db_index=True,
         verbose_name='Idempotency key',
     )
+    reservation_token = models.CharField(
+        max_length=128,
+        blank=True,
+        null=True,
+        db_index=True,
+        verbose_name='Reservation token',
+    )
     order = models.OneToOneField(
         Order,
         on_delete=models.SET_NULL,
