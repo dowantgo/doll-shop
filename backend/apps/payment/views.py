@@ -5,6 +5,7 @@ import secrets
 from datetime import timedelta
 
 import qrcode
+from django.core.cache import cache
 from django.db import transaction
 from django.http import HttpResponse
 from django.utils import timezone
@@ -16,6 +17,7 @@ from rest_framework.views import APIView
 
 from apps.orders.models import Order
 from apps.orders.services.pricing import clear_pending_payment_probe, set_pending_payment_probe
+from dollshop.metrics import metric_increment
 
 from .models import PaymentTransaction
 from .serializers import CreatePaymentSerializer
@@ -28,6 +30,8 @@ from .services.errors import (
 )
 
 logger = logging.getLogger(__name__)
+PAYMENT_STATUS_CACHE_TTL = 3
+PAYMENT_STATUS_RATE_LIMIT_SECONDS = 2
 
 
 class IsAdminUser(IsAuthenticated):
@@ -62,6 +66,47 @@ def _generate_qr_code_image(qr_url: str) -> str:
     except Exception as e:
         logger.error(f"生成二维码图片失败: {e}")
         return ""
+
+
+def _payment_status_cache_key(out_trade_no: str) -> str:
+    return f'iter5:payment:status:{out_trade_no}'
+
+
+def _payment_rate_limit_key(user_id: int, out_trade_no: str, suffix: str) -> str:
+    return f'iter5:payment:rate:{suffix}:{user_id}:{out_trade_no}'
+
+
+def _build_status_payload(txn: PaymentTransaction) -> dict:
+    status_map = {
+        'paid': 'success',
+        'failed': 'failed',
+        'closed': 'closed',
+        'expired': 'closed',
+        'pending': 'pending',
+    }
+    return {
+        'payment_id': txn.out_trade_no,
+        'status': status_map.get(txn.status, 'pending'),
+        'trade_no': txn.trade_no or '',
+    }
+
+
+def _cache_payment_status(txn: PaymentTransaction, payload: dict) -> None:
+    if txn.status == 'pending':
+        cache.set(_payment_status_cache_key(txn.out_trade_no), payload, timeout=PAYMENT_STATUS_CACHE_TTL)
+    else:
+        cache.delete(_payment_status_cache_key(txn.out_trade_no))
+
+
+def _allow_payment_status_query(user_id: int, out_trade_no: str, suffix: str) -> bool:
+    created = cache.add(
+        _payment_rate_limit_key(user_id, out_trade_no, suffix),
+        1,
+        timeout=PAYMENT_STATUS_RATE_LIMIT_SECONDS,
+    )
+    if not created:
+        metric_increment('payment_status_rate_limited', endpoint=suffix)
+    return created
 
 
 @transaction.atomic
@@ -107,6 +152,7 @@ def _mark_paid(txn: PaymentTransaction, trade_no: str = '') -> None:
     if changed:
         order.save()
     clear_pending_payment_probe(order.user_id, txn.out_trade_no)
+    cache.delete(_payment_status_cache_key(txn.out_trade_no))
     logger.info(
         'payment_mark_paid payment_id=%s order_id=%s trade_no=%s payment_method=%s',
         txn.out_trade_no,
@@ -407,9 +453,20 @@ class PaymentStatusView(APIView):
             txn.status = 'closed'
             txn.save(update_fields=['status', 'updated_at'])
             clear_pending_payment_probe(txn.order.user_id, txn.out_trade_no)
+            cache.delete(_payment_status_cache_key(txn.out_trade_no))
+
+        if txn.status == 'pending':
+            cached_payload = cache.get(_payment_status_cache_key(txn.out_trade_no))
+            if cached_payload:
+                metric_increment('payment_status_cache_hit', endpoint='status')
+                return Response(cached_payload)
+
+        if not _allow_payment_status_query(request.user.id, txn.out_trade_no, 'status'):
+            return Response({'error': '支付状态查询过于频繁，请稍后再试。'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         if txn.status == 'pending' and txn.payment_method == 'alipay':
             try:
+                metric_increment('payment_third_party_query', endpoint='status')
                 query = alipay_service.query_order(txn.out_trade_no)
                 trade_status = query.get('trade_status')
                 if trade_status in ('TRADE_SUCCESS', 'TRADE_FINISHED'):
@@ -419,31 +476,21 @@ class PaymentStatusView(APIView):
                     txn.status = 'closed'
                     txn.save(update_fields=['status', 'updated_at'])
                     clear_pending_payment_probe(txn.order.user_id, txn.out_trade_no)
+                    cache.delete(_payment_status_cache_key(txn.out_trade_no))
             except PaymentError:
                 pass
 
-        status_map = {
-            'paid': 'success',
-            'failed': 'failed',
-            'closed': 'closed',
-            'expired': 'closed',
-            'pending': 'pending',
-        }
+        payload = _build_status_payload(txn)
+        _cache_payment_status(txn, payload)
         logger.info(
             'payment_status payment_id=%s order_id=%s user_id=%s status=%s',
             txn.out_trade_no,
             txn.order.order_id,
             request.user.id,
-            status_map.get(txn.status, 'pending'),
+            payload['status'],
         )
 
-        return Response(
-            {
-                'payment_id': txn.out_trade_no,
-                'status': status_map.get(txn.status, 'pending'),
-                'trade_no': txn.trade_no or '',
-            }
-        )
+        return Response(payload)
 
 
 class MockPayView(APIView):
@@ -496,6 +543,7 @@ class ClosePaymentView(APIView):
         txn.status = 'closed'
         txn.save(update_fields=['status', 'updated_at'])
         clear_pending_payment_probe(txn.order.user_id, txn.out_trade_no)
+        cache.delete(_payment_status_cache_key(txn.out_trade_no))
         logger.info(
             'payment_closed payment_id=%s order_id=%s user_id=%s',
             txn.out_trade_no,
@@ -511,7 +559,7 @@ class PaymentQueryView(APIView):
     def get(self, request):
         out_trade_no = request.query_params.get('out_trade_no', '').strip()
         if not out_trade_no:
-            return Response({'error': 'out_trade_no 必填'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'out_trade_no is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             txn = PaymentTransaction.objects.select_related('order').get(
@@ -519,31 +567,68 @@ class PaymentQueryView(APIView):
                 order__user=request.user,
             )
         except PaymentTransaction.DoesNotExist:
-            return Response({'error': '支付单不存在'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Payment transaction not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if txn.status == 'pending' and txn.expire_time and timezone.now() > txn.expire_time:
+            txn.status = 'closed'
+            txn.save(update_fields=['status', 'updated_at'])
+            clear_pending_payment_probe(txn.order.user_id, txn.out_trade_no)
+            cache.delete(_payment_status_cache_key(txn.out_trade_no))
+
+        if not _allow_payment_status_query(request.user.id, txn.out_trade_no, 'query'):
+            return Response({'error': 'Payment status query is too frequent. Please try again later.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        if txn.status == 'pending':
+            cached_payload = cache.get(_payment_status_cache_key(txn.out_trade_no))
+            if cached_payload:
+                metric_increment('payment_status_cache_hit', endpoint='query')
+                logger.info(
+                    'payment_query payment_id=%s order_id=%s user_id=%s status=%s cached=%s',
+                    txn.out_trade_no,
+                    txn.order.order_id,
+                    request.user.id,
+                    cached_payload['status'],
+                    True,
+                )
+                return Response(
+                    {
+                        **cached_payload,
+                        'amount': str(txn.amount),
+                        'payment_method': txn.payment_method,
+                        'alipay': {},
+                    }
+                )
 
         alipay_info = {}
-        if txn.payment_method == 'alipay':
+        if txn.status == 'pending' and txn.payment_method == 'alipay':
             try:
+                metric_increment('payment_third_party_query', endpoint='query')
                 alipay_info = alipay_service.query_order(out_trade_no)
                 trade_status = alipay_info.get('trade_status')
                 if trade_status in ('TRADE_SUCCESS', 'TRADE_FINISHED'):
                     _mark_paid(txn, alipay_info.get('trade_no', ''))
                     txn.refresh_from_db()
+                elif trade_status == 'TRADE_CLOSED' and txn.status != 'paid':
+                    txn.status = 'closed'
+                    txn.save(update_fields=['status', 'updated_at'])
+                    clear_pending_payment_probe(txn.order.user_id, txn.out_trade_no)
+                    cache.delete(_payment_status_cache_key(txn.out_trade_no))
             except PaymentError as exc:
                 alipay_info = {'error': str(exc)}
+
+        payload = _build_status_payload(txn)
+        _cache_payment_status(txn, payload)
         logger.info(
             'payment_query payment_id=%s order_id=%s user_id=%s status=%s',
             txn.out_trade_no,
             txn.order.order_id,
             request.user.id,
-            txn.status,
+            payload['status'],
         )
 
         return Response(
             {
-                'payment_id': txn.out_trade_no,
-                'status': txn.status,
-                'trade_no': txn.trade_no,
+                **payload,
                 'amount': str(txn.amount),
                 'payment_method': txn.payment_method,
                 'alipay': alipay_info,
@@ -586,6 +671,7 @@ class AliPayNotifyView(View):
             txn.status = 'closed'
             txn.save(update_fields=['status', 'updated_at'])
             clear_pending_payment_probe(txn.order.user_id, txn.out_trade_no)
+            cache.delete(_payment_status_cache_key(txn.out_trade_no))
             logger.info(
                 'alipay_notify_closed payment_id=%s order_id=%s',
                 txn.out_trade_no,

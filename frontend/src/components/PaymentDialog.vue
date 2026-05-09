@@ -77,6 +77,7 @@ const qrCodeUrl = ref('')
 const qrCodeImage = ref('')
 const failReason = ref('')
 let pollTimer = null
+let pollAttempt = 0
 
 const errorText = e =>
   e?.response?.data?.error ||
@@ -93,11 +94,12 @@ const resetState = () => {
   qrCodeUrl.value = ''
   qrCodeImage.value = ''
   failReason.value = ''
+  pollAttempt = 0
 }
 
 const clearPoll = () => {
   if (pollTimer) {
-    clearInterval(pollTimer)
+    clearTimeout(pollTimer)
     pollTimer = null
   }
 }
@@ -135,21 +137,28 @@ const createPayment = async () => {
 
 const startPolling = () => {
   clearPoll()
-  pollTimer = setInterval(async () => {
+  pollAttempt = 0
+  const runPoll = async () => {
     try {
       const res = await paymentApi.getStatus(paymentId.value)
       if (res.status === 'success') {
         clearPoll()
         step.value = 'success'
+        return
       } else if (res.status === 'failed' || res.status === 'closed') {
         clearPoll()
         failReason.value = res.status === 'closed' ? '支付已关闭或超时' : '支付失败'
         step.value = 'failed'
+        return
       }
     } catch (_e) {
-      // keep polling silently
+      // allow backoff retry
     }
-  }, 3000)
+    pollAttempt += 1
+    const nextDelay = pollAttempt <= 3 ? 2000 : pollAttempt <= 9 ? 5000 : 10000
+    pollTimer = setTimeout(runPoll, nextDelay)
+  }
+  pollTimer = setTimeout(runPoll, 2000)
 }
 
 const mockPay = async () => {

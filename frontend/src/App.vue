@@ -43,6 +43,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ShoppingCart, User } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { cartApi } from './api/cart'
+import { userApi } from './api/user'
 import { useUserStore } from './stores/userStore'
 
 const router = useRouter()
@@ -54,11 +55,17 @@ const user = computed(() => userStore.user)
 const cartCount = ref(0)
 const isAdminRoute = computed(() => route.path.startsWith('/admin'))
 
-const logout = () => {
-  userStore.logout()
-  cartCount.value = 0
-  ElMessage.success('已退出登录')
-  router.push('/')
+const logout = async () => {
+  try {
+    await userApi.logout()
+  } catch (_e) {
+    // local cleanup still proceeds
+  } finally {
+    userStore.logout()
+    cartCount.value = 0
+    ElMessage.success('已退出登录')
+    router.push('/')
+  }
 }
 
 const goAdmin = () => {

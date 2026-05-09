@@ -125,3 +125,36 @@ class OrderItem(models.Model):
     @property
     def subtotal(self):
         return self.price * self.quantity
+
+
+class OrderSubmission(models.Model):
+    STATUS_PROCESSING = 'processing'
+    STATUS_SUCCEEDED = 'succeeded'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = (
+        (STATUS_PROCESSING, 'Processing'),
+        (STATUS_SUCCEEDED, 'Succeeded'),
+        (STATUS_FAILED, 'Failed'),
+    )
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='order_submissions', verbose_name='User')
+    idempotency_key = models.CharField(max_length=100, verbose_name='Idempotency key')
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PROCESSING, verbose_name='Status')
+    order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True, related_name='submission_records', verbose_name='Order')
+    last_error = models.TextField(blank=True, default='', verbose_name='Last error')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Created at')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Updated at')
+
+    class Meta:
+        verbose_name = 'Order submission'
+        verbose_name_plural = 'Order submissions'
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'idempotency_key'], name='uniq_order_submission_user_key'),
+        ]
+        indexes = [
+            models.Index(fields=['user', 'status', '-created_at'], name='idx_order_submit_user_status'),
+        ]
+
+    def __str__(self):
+        return f'{self.user_id}-{self.idempotency_key}'

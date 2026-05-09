@@ -76,6 +76,7 @@ class Iter3TradeFlowTests(APITestCase):
             '/api/orders/orders/create_from_cart/',
             {'address_id': self.address.id, 'remark': ''},
             format='json',
+            HTTP_X_IDEMPOTENCY_KEY='iter3-preview-create-order',
         )
         self.assertEqual(order_resp.status_code, status.HTTP_201_CREATED)
         order_id = order_resp.data['order_id']

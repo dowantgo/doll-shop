@@ -218,12 +218,17 @@ REST_FRAMEWORK = {
 # Simple JWT configuration
 from datetime import timedelta
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': False,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
+
+JWT_REFRESH_COOKIE_NAME = os.getenv('JWT_REFRESH_COOKIE_NAME', 'refresh_token')
+JWT_REFRESH_COOKIE_SECURE = os.getenv('JWT_REFRESH_COOKIE_SECURE', 'False') == 'True'
+JWT_REFRESH_COOKIE_SAMESITE = os.getenv('JWT_REFRESH_COOKIE_SAMESITE', 'Lax')
+JWT_REFRESH_COOKIE_PATH = os.getenv('JWT_REFRESH_COOKIE_PATH', '/api/users/users/')
 
 # CORS configuration
 CORS_ALLOWED_ORIGINS = [
@@ -236,6 +241,7 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:8000',
     'http://127.0.0.1:8000',
 ]
+CORS_ALLOW_CREDENTIALS = True
 
 # drf-spectacular configuration
 SPECTACULAR_SETTINGS = {
@@ -287,6 +293,10 @@ CELERY_BEAT_SCHEDULE = {
     'payment-reconcile-pending-every-15-min': {
         'task': 'payment.reconcile_pending',
         'schedule': crontab(minute='*/15'),
+    },
+    'order-cleanup-expired-every-minute': {
+        'task': 'orders.cleanup_expired_orders',
+        'schedule': crontab(minute='*/1'),
     },
 }
 

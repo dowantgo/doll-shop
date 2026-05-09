@@ -1,9 +1,7 @@
-from datetime import timedelta
 from decimal import Decimal
 import logging
 
-from django.db import transaction
-from django.db.models import Q
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -17,8 +15,9 @@ from apps.coupons.services import to_money
 from apps.products.cache_utils import bump_feed_version_on_commit
 from apps.products.models import Product
 from apps.users.models import Address
+from dollshop.metrics import metric_increment
 
-from .models import Order
+from .models import Order, OrderSubmission
 from .services.lifecycle import release_locked_coupon
 from .services.logistics import get_logistics_provider
 from .services.pricing import build_pricing_preview, pending_payment_probe
@@ -67,81 +66,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         return pending_payment_probe(user)
 
     def list(self, request, *args, **kwargs):
-        self._cleanup_expired_orders()
         return super().list(request, *args, **kwargs)
-
-    def _cleanup_expired_orders(self):
-        now = timezone.now()
-        expired_time = now - timedelta(minutes=30)
-        expired_orders = Order.objects.filter(
-            payment_status='pending',
-            status='pending',
-        ).filter(
-            Q(expires_at__lt=now) | Q(expires_at__isnull=True, created_at__lt=expired_time)
-        )
-
-        for order in expired_orders:
-            has_sales_change = False
-            try:
-                with transaction.atomic():
-                    for item in order.items.all():
-                        if item.product:
-                            product = Product.objects.select_for_update().get(id=item.product.id)
-                            product.stock += item.quantity
-                            product.sales -= item.quantity
-                            product.save()
-                            has_sales_change = True
-
-                    seckill_reservation = getattr(order, 'seckill_reservation', None)
-                    if seckill_reservation and seckill_reservation.status in ('reserved', 'ordered'):
-                        from apps.seckill.models import SeckillActivity, SeckillReservation
-
-                        locked_reservation = (
-                            SeckillReservation.objects
-                            .select_for_update()
-                            .filter(id=seckill_reservation.id)
-                            .first()
-                        )
-                        if locked_reservation and locked_reservation.status in ('reserved', 'ordered'):
-                            activity = SeckillActivity.objects.select_for_update().get(id=locked_reservation.activity_id)
-                            activity.reserved_stock = max(activity.reserved_stock - locked_reservation.quantity, 0)
-                            activity.save(update_fields=['reserved_stock', 'updated_at'])
-
-                            locked_reservation.status = 'expired'
-                            locked_reservation.order = None
-                            locked_reservation.reserved_expires_at = None
-                            locked_reservation.save(
-                                update_fields=['status', 'order', 'reserved_expires_at', 'updated_at']
-                            )
-                    order.status = 'cancelled'
-                    order.save(update_fields=['status', 'updated_at'])
-
-                    snapshot = (
-                        OrderDiscountSnapshot.objects
-                        .select_for_update()
-                        .select_related('user_coupon')
-                        .filter(order=order)
-                        .first()
-                    )
-                    coupon_id, coupon_no = release_locked_coupon(snapshot)
-                    if coupon_id:
-                        logger.info(
-                            'expired_order_release_coupon order_id=%s coupon_id=%s coupon_no=%s',
-                            order.order_id,
-                            coupon_id,
-                            coupon_no,
-                        )
-                if has_sales_change:
-                    bump_feed_version_on_commit()
-                logger.info('expired_order_cancelled order_id=%s user_id=%s', order.order_id, order.user_id)
-            except Exception:
-                logger.exception(
-                    'Failed to cleanup expired order id=%s order_id=%s created_at=%s fallback_expired_time=%s',
-                    order.id,
-                    order.order_id,
-                    order.created_at,
-                    expired_time,
-                )
 
     @action(detail=False, methods=['post'])
     def create_from_cart(self, request):
@@ -152,17 +77,75 @@ class OrderViewSet(viewsets.ModelViewSet):
         address_id = serializer.validated_data['address_id']
         remark = serializer.validated_data.get('remark', '')
 
-        cart_items = CartItem.objects.filter(user=request.user).select_related('product')
-        if not cart_items.exists():
-            return Response({'error': 'Cart is empty.'}, status=status.HTTP_400_BAD_REQUEST)
-
         try:
             address = Address.objects.get(id=address_id, user=request.user)
         except Address.DoesNotExist:
             return Response({'error': 'Address not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        idempotency_key = (request.headers.get('X-Idempotency-Key') or '').strip()
+        if not idempotency_key:
+            return Response({'error': 'Missing X-Idempotency-Key header.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        submission = None
+        created_submission = False
+        try:
+            with transaction.atomic():
+                submission = (
+                    OrderSubmission.objects
+                    .select_for_update()
+                    .filter(user=request.user, idempotency_key=idempotency_key)
+                    .first()
+                )
+                if submission:
+                    if submission.status == OrderSubmission.STATUS_SUCCEEDED and submission.order_id:
+                        serializer = OrderSerializer(submission.order, context={'request': request})
+                        metric_increment('order_idempotency_hit')
+                        logger.info(
+                            'order_idempotency_hit order_id=%s user_id=%s idempotency_key=%s',
+                            submission.order.order_id,
+                            request.user.id,
+                            idempotency_key,
+                        )
+                        return Response(serializer.data, status=status.HTTP_200_OK)
+                    return Response(
+                        {'error': 'Order submission is already processing.'},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+                submission = OrderSubmission.objects.create(
+                    user=request.user,
+                    idempotency_key=idempotency_key,
+                    status=OrderSubmission.STATUS_PROCESSING,
+                )
+                created_submission = True
+        except IntegrityError:
+            submission = OrderSubmission.objects.filter(user=request.user, idempotency_key=idempotency_key).first()
+            if submission and submission.status == OrderSubmission.STATUS_SUCCEEDED and submission.order_id:
+                serializer = OrderSerializer(submission.order, context={'request': request})
+                metric_increment('order_idempotency_hit')
+                logger.info(
+                    'order_idempotency_hit order_id=%s user_id=%s idempotency_key=%s race=integrity',
+                    submission.order.order_id,
+                    request.user.id,
+                    idempotency_key,
+                )
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response({'error': 'Order submission is already processing.'}, status=status.HTTP_409_CONFLICT)
+
+        cart_items = CartItem.objects.filter(user=request.user).select_related('product')
+        if not cart_items.exists():
+            if created_submission and submission:
+                submission.status = OrderSubmission.STATUS_FAILED
+                submission.last_error = 'Cart is empty.'
+                submission.save(update_fields=['status', 'last_error', 'updated_at'])
+            return Response({'error': 'Cart is empty.'}, status=status.HTTP_400_BAD_REQUEST)
+
         for item in cart_items:
             if item.product.stock < item.quantity:
+                if created_submission and submission:
+                    submission.status = OrderSubmission.STATUS_FAILED
+                    submission.last_error = f'Insufficient stock for product \"{item.product.name}\".'
+                    submission.save(update_fields=['status', 'last_error', 'updated_at'])
                 return Response(
                     {'error': f'Insufficient stock for product "{item.product.name}".'},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -219,16 +202,26 @@ class OrderViewSet(viewsets.ModelViewSet):
 
             bump_feed_version_on_commit()
             logger.info(
-                'order_created order_id=%s user_id=%s total_price=%s item_count=%s',
+                'order_created order_id=%s user_id=%s total_price=%s item_count=%s idempotency_key=%s',
                 order.order_id,
                 request.user.id,
                 order.total_price,
                 order.items.count(),
+                idempotency_key,
             )
+            if submission:
+                submission.status = OrderSubmission.STATUS_SUCCEEDED
+                submission.order = order
+                submission.last_error = ''
+                submission.save(update_fields=['status', 'order', 'last_error', 'updated_at'])
             serializer = OrderSerializer(order, context={'request': request})
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
+            if created_submission and submission:
+                submission.status = OrderSubmission.STATUS_FAILED
+                submission.last_error = str(e)
+                submission.save(update_fields=['status', 'last_error', 'updated_at'])
             return Response({'error': f'Order create failed: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=False, methods=['post'], url_path='price-preview')

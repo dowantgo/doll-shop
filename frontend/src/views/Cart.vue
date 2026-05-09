@@ -288,10 +288,14 @@ const clearCart = async () => {
 const createOrder = async () => {
   checkoutLoading.value = true
   try {
+    const idempotencyKey =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `order-${Date.now()}-${Math.random().toString(16).slice(2)}`
     const orderRes = await orderApi.createOrder({
       address_id: checkout.addressId,
       remark: checkout.remark || ''
-    })
+    }, idempotencyKey)
     if (checkout.couponId) {
       await couponApi.applyCoupon(orderRes.order_id, { coupon_id: checkout.couponId })
     }

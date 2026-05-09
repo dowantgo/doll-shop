@@ -129,11 +129,12 @@ const onLogin = async () => {
       captcha_code: form.captcha_code
     })
 
-    if (!data?.token || !data?.user) {
+    const accessToken = data?.access_token || data?.token
+    if (!accessToken || !data?.user) {
       throw new Error('登录返回格式异常，缺少 token 或 user')
     }
 
-    userStore.setUser(data.user, data.token)
+    userStore.setUser(data.user, accessToken)
     ElMessage.success('登录成功')
     if (data.user.role === 'admin') {
       router.push('/admin')

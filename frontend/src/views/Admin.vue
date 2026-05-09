@@ -92,6 +92,7 @@ import {
   Timer,
   User
 } from '@element-plus/icons-vue'
+import { userApi } from '../api/user'
 import { useUserStore } from '../stores/userStore'
 
 const route = useRoute()
@@ -110,7 +111,12 @@ const logout = () => {
     cancelButtonText: '取消',
     type: 'warning'
   })
-    .then(() => {
+    .then(async () => {
+      try {
+        await userApi.logout()
+      } catch (_e) {
+        // local cleanup still proceeds
+      }
       userStore.logout()
       ElMessage.success('已退出登录')
       router.push('/login')
