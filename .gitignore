@@ -98,6 +98,9 @@ ngrok.exe
 # Local generated data and scratch files
 backend/media/
 backend/tmp_*.py
+abc.lock
+tmp_*.txt
+tmp_*.md
 
 # Local ad-hoc scripts/tests (non-release)
 backend/scripts/
@@ -108,3 +111,51 @@ test-docs/
 
 # Legacy requirement drafts (migrated to docs/requirements)
 demand/
+
+# --------------------------------------------------
+# Docs strategy
+# - Local workspace keeps the full docs knowledge base
+# - GitHub keeps only deliverable requirements/testing docs
+# --------------------------------------------------
+
+# Ignore docs by default
+docs/*
+
+# Keep iteration requirements/testing docs in Git
+!docs/requirements/
+!docs/requirements/**
+!docs/testing/
+!docs/testing/**
+
+# Keep richer local docs only on local workspace
+docs/architecture/
+docs/guides/
+docs/interview-skill/
+docs/postmortems/
+
+# Local-only requirement attachments and drafts
+docs/requirements/**/附件/
+docs/requirements/**/附件/**
+docs/requirements/iter1/第一次迭代-重构版.md
+docs/requirements/iter1/第一次迭代-重构版-v2.md
+docs/requirements/iter1/第一次迭代测试用例模板确认稿.md
+docs/requirements/iter4/第四个迭代性能优化与架构治理.md
+docs/requirements/iter5/第五个迭代需求-5.2.md
+
+# Local-only testing assets
+docs/testing/**/results/
+docs/testing/**/results/**
+docs/testing/**/*.json
+docs/testing/**/*.xmind
+docs/testing/**/*.xlsx
+docs/testing/iter1/第一次迭代-v2-测试用例表.md
+docs/testing/iter2/iter2-rc1-测试报告.md
+docs/testing/iter2/iter2-rc1-缺陷清单.md
+docs/testing/**/*测试脑图.md
+docs/testing/**/*基线清单.md
+docs/testing/**/*测试报告模板.md
+docs/testing/**/*测试结论与整改清单.md
+docs/testing/**/*测试计划.md
+docs/testing/**/*对比报告.md
+
+scripts/
